@@ -42,14 +42,26 @@ Target:   Dolt (versioned, multi-project, team-shared) + native skills + local+c
 ### Phase 1: Credibility (Weeks 1-3)
 
 **Goal**: Get 2-3 PRs merged to establish contributor reputation.
+**Rubric**: ADR-0001 (score >= 6 to pursue, >= 8 = high priority)
 
-| PR | Issue | Effort | Impact |
-|----|-------|--------|--------|
-| Fix Anthropic-compatible custom model names | #3545 (19 rxn) | Low — model name handling in types/providers | Highest community demand |
-| Fix MCP "Always allow" persistence | #2041 | Low — config write path | Frequent user complaint |
-| Error surface for API failures | #4262 (8 rxn) | Medium — provider error handling | High frustration |
+**Tier 1 — High confidence (score >= 8):**
 
-**Pattern**: Precise bug fixes with clear scope. Match what gets merged from externals.
+| Issue | Title | Score | Beads |
+|-------|-------|-------|-------|
+| #3545 | Anthropic custom model names | 8 (demand:2 scope:1 avail:2 align:2 signal:1) | kc-9uu |
+| #4331 | Ollama Cloud regression | 8 (demand:2 scope:1 avail:2 align:2 signal:1) | kc-TODO |
+| #6018 | Gemini thought_signature | 8 (demand:1 scope:2 avail:2 align:2 signal:1) | kc-TODO |
+
+**Tier 2 — Solid picks (score = 6):**
+
+| Issue | Title | Score | Beads |
+|-------|-------|-------|-------|
+| #6046 | Snapshot git gc (68GB growth) | 6 (demand:0 scope:2 avail:2 align:1 signal:1) | kc-TODO |
+| #3608 | Bedrock/Vertex native tool calls | 6 (demand:0 scope:0 avail:2 align:2 signal:2) | kc-TODO |
+| #6026 | Show x-request-id in errors | 6 (demand:0 scope:2 avail:2 align:1 signal:1) | kc-TODO |
+| #6051 | Broken link Speech Recognition | 6 (demand:0 scope:2 avail:2 align:0 signal:2) | kc-TODO |
+
+**Pattern**: 4 of 7 candidates are provider-layer work — builds knowledge for Phase 2 plugins.
 
 ### Phase 2: Plugin Ecosystem (Weeks 4-8)
 
