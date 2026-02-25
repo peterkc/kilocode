@@ -58,3 +58,30 @@ Per contribution rules.
 
 Post root cause analysis as a comment on the upstream issue before filing PR.
 Demonstrates diagnostic rigor and gives maintainers context.
+
+## D8: Bug already fixed upstream — pivot to test PR
+
+**Status**: Confirmed
+
+Commit 021e42c0b (2026-01-20) added the `differentModel` guard. Subsequent
+commits corrected the comparison from `model.api.id` to `model.id`. The
+current `upstream/main` handles thoughtSignature correctly for same-model
+sessions. GH#6018 reporter on v5.8.0 may have been on a version with the
+inconsistent comparison.
+
+E2E test with `gemini-3.1-pro-preview` (the exact GH#6018 model) confirms
+the pipeline works end-to-end on current code.
+
+**Pivot**: Instead of a code fix, submit:
+1. Diagnostic comment on GH#6018 (ask reporter to update)
+2. Test PR adding Gemini thoughtSignature regression coverage
+
+## D9: First principles should be Step 1, not Step N
+
+**Status**: Lesson captured
+
+Hours of SDK investigation proved the pipeline works — because it was
+already fixed. Checking `git log --all -p -- message-v2.ts` for
+"thoughtSignature" or "provider.*metadata" would have found 021e42c0b
+in seconds. Applied first principles (deconstruct/reconstruct) too
+late in the process.
