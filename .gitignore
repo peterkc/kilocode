@@ -38,3 +38,9 @@ logs/
 # Telemetry ID
 telemetry-id
 tsconfig.tsbuildinfo
+
+# === peterkc fork infrastructure (do not upstream) ===
+.agents/specs/
+.agents/research/
+.agents/adr/
+.beads/
