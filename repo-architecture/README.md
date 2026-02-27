@@ -83,6 +83,19 @@ git show <commit>:src/core/tools/ReadFileTool.ts       # exists = old arch
 3. The `read_file` tool was completely rewritten during the migration
 4. Error messages, parameter names, and indexing conventions all changed
 
+## Known Pre-v7.x Issues (Resolved by Migration)
+
+All four `read_file` issues in the tracker target the old architecture:
+
+| Issue | Version | Problem | v7.x Resolution |
+|-------|---------|---------|-----------------|
+| [#6248](https://github.com/Kilo-Org/kilocode/issues/6248) | v5.9.0 | No line count in OOB error | `read.ts:189` includes `(N lines)` |
+| [#5872](https://github.com/Kilo-Org/kilocode/issues/5872) | v5.7.0 | Qwen sends wrong params | Flat Zod schema, no conditional shapes |
+| [#4679](https://github.com/Kilo-Org/kilocode/issues/4679) | v4.140.2 | Directories cause errors | Native dir support (`6b4d617`, #13090) |
+| [#4073](https://github.com/Kilo-Org/kilocode/issues/4073) | v4.125.0 | Can't read lines 1000-2000 | Streaming readline, no buffer limits |
+
+Comments posted: [#6248](https://github.com/Kilo-Org/kilocode/issues/6248#issuecomment-3975483312), [#5872](https://github.com/Kilo-Org/kilocode/issues/5872#issuecomment-3975550163), [#4679](https://github.com/Kilo-Org/kilocode/issues/4679#issuecomment-3975551174). #4073 already closed/stale.
+
 ## Sources
 
 - `gh release list --repo Kilo-Org/kilocode`
