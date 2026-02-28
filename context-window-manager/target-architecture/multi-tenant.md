@@ -70,13 +70,13 @@ Dolt Server (port 3307)
 - Pro: Per-project isolation (branches, history, GC are independent)
 - Pro: Selective sharing (`dolt push` per-project database)
 - Pro: Clean lifecycle (drop database = remove project entirely)
-- Pro: Matches ACF's proven pattern (ADR-2007: `acf_beads`, `agx_beads`, `ckd_beads`)
+- Pro: Matches a proven pattern: per-project databases on a shared server
 - Con: Database creation overhead per new project (~50ms)
 - Con: Cross-project queries need multi-database JOIN (rare use case)
 - Con: More databases = more Dolt metadata
 
-**Why this matches ACF's pattern**: ADR-2007 chose per-project databases on a shared
-server for beads. The operational benefit was proven: adding a project = create
+**Why this pattern works**: Prior operational experience confirms per-project databases on a shared
+server scale well. The operational benefit is proven: adding a project = create
 database, not a new process or port. The same pattern scales for Kilo.
 
 ## Database Naming Convention
@@ -585,11 +585,11 @@ across tables — the whole database goes.
 | **Lifecycle hooks** | `session.start` triggers database resolution |
 | **Migration** | Phase 0 adds `kilo_meta`; Phase 3 creates per-project DBs |
 
-## Lessons from ACF Beads (ADR-2007)
+## Operational Lessons from Prior Dolt Migrations
 
-| Lesson | How We Apply It |
-|--------|----------------|
-| Per-project databases on shared server | Exact same pattern: `kilo_{prefix}` per project |
+| Lesson | Application to Kilo |
+|--------|---------------------|
+| Per-project databases on shared server | Same pattern: `kilo_{prefix}` per project |
 | launchctl for server management | Kilo manages its own Dolt process (see #9, #10) |
 | Adding a project = create database, not new process | `ensureProjectDatabase()` handles this |
 | Separate workload profiles | Session data (read-heavy) vs tool outputs (write-heavy) share a server |

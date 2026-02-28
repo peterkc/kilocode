@@ -2,7 +2,7 @@
 
 ## Lesson from Beads: SQLite → Dolt Was Too Abrupt
 
-The beads project switched from SQLite embedded mode to Dolt server mode in one
+A prior project switched from SQLite embedded mode to Dolt server mode in one
 release. Users hit:
 
 - Dolt not installed → crash on startup

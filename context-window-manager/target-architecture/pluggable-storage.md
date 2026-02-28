@@ -6,8 +6,8 @@ Three sources inform this architecture:
 
 | Source | Pattern Borrowed | Application |
 |--------|-----------------|-------------|
-| **ckd** (Hexagonal) | Ports & Adapters, optional interface probing, composition root | `StoragePort` base + optional capabilities (`Versioned`, `Branching`, `Searchable`) |
-| **ACF Traces** (Medallion) | Bronze → Silver → Gold data lifecycle | Messages (Bronze) → Context views (Silver) → Compaction summaries (Gold) |
+| **Hexagonal Architecture** | Ports & Adapters, optional interface probing, composition root | `StoragePort` base + optional capabilities (`Versioned`, `Branching`, `Searchable`) |
+| **Medallion Architecture** | Bronze → Silver → Gold data lifecycle | Messages (Bronze) → Context views (Silver) → Compaction summaries (Gold) |
 | **Kilo Current** (Hooks) | Plugin system with 13 hook points | Extended with storage lifecycle hooks for observability and interception |
 
 ### Core Invariant
@@ -20,14 +20,14 @@ App → Ports ← Adapters
     Composition Root (wire.ts)
 ```
 
-This is ckd's defining pattern. It means swapping SQLite for Dolt changes exactly one
+This is the hexagonal architecture pattern. It means swapping SQLite for Dolt changes exactly one
 file: the composition root.
 
 ---
 
 ## 1. Storage Port Interfaces
 
-Borrowing ckd's tiered interface model. The base port is required; everything else is
+Borrowing a tiered interface model from hexagonal architecture. The base port is required; everything else is
 optional and discovered at runtime via TypeScript type guards.
 
 ### Base Port (Required — All Backends)
@@ -116,7 +116,7 @@ This enables the Git DAG model from the seed research:
 - Compaction = `deleteBranch()` + `gc()`
 - Context trunk stays small (pointers to branches)
 
-### Searchable Storage (Optional — Dolt+ckd, Postgres+pgvector)
+### Searchable Storage (Optional — Dolt + Semantic Search, Postgres+pgvector)
 
 ```typescript
 // storage/port.ts
@@ -130,8 +130,8 @@ export interface SearchableStorage extends StoragePort {
 }
 ```
 
-This is the ckd integration point. When Dolt backend is active and ckd is installed,
-semantic search over conversation history becomes native.
+This is the semantic search integration point. When Dolt backend is active and a semantic search provider is installed,
+search over conversation history becomes native.
 
 ### Hookable Storage (Optional — All Backends, Plugin Bridge)
 
@@ -155,9 +155,9 @@ A plugin can now observe (or modify) every DB write — enabling:
 
 ---
 
-## 2. Optional Interface Probing (ckd Pattern)
+## 2. Optional Interface Probing (Hexagonal Architecture Pattern)
 
-The key pattern from ckd: callers check for optional capabilities at runtime.
+The key pattern from hexagonal architecture: callers check for optional capabilities at runtime.
 
 ```typescript
 // session/compaction.ts — using optional interface probing
@@ -195,7 +195,7 @@ async function prune(input: { sessionID: string }) {
   }
 }
 
-// Type guards (like ckd's `storage.(ports.ChunkDeleter)` pattern)
+// Type guards (Go-style interface assertion pattern)
 function isVersioned(s: StoragePort): s is VersionedStorage {
   return 'commit' in s && 'asOf' in s
 }
@@ -215,7 +215,7 @@ No feature flags needed — capabilities are auto-detected from the adapter.
 
 ## 3. Medallion Data Lifecycle
 
-Borrowing from ACF traces. Three layers with clear boundaries:
+Borrowing from the medallion data lifecycle pattern. Three layers with clear boundaries:
 
 ### Bronze: Raw Capture (Message + Part Tables)
 
@@ -228,7 +228,7 @@ This is what Kilo does today. The schema stays the same.
 
 **New**: Storage hooks fire on every write, enabling:
 - Plugin-based mirroring to external systems
-- Real-time event streaming (like ACF's `trace-dispatcher.py`)
+- Real-time event streaming (via a hook-based event dispatcher)
 - Audit trail in Dolt's commit log
 
 ### Silver: Context Views (SQL Views or Computed Queries)
@@ -302,7 +302,7 @@ CREATE TABLE session_summaries (
 );
 ```
 
-Gold is persisted at compaction time (like ACF's PreCompact hook).
+Gold is persisted at compaction time (via a pre-compaction lifecycle hook).
 If the session crashes or compacts, Gold provides recovery context.
 
 **Current Kilo**: The compaction summary is stored as a regular assistant message
@@ -371,7 +371,7 @@ User sends message
 
 ## 5. Composition Root (wire.ts)
 
-Like ckd's `wire.go`, one file handles all adapter selection:
+Following the composition root pattern, one file handles all adapter selection:
 
 ```typescript
 // storage/wire.ts
@@ -529,7 +529,7 @@ export class DoltAdapter implements StoragePort, VersionedStorage,
     // Return stats
   }
 
-  // SearchableStorage (with ckd integration)
+  // SearchableStorage (with semantic search provider)
   async vectorSearch(embedding: number[], opts: VectorSearchOpts) {
     return this.pool.query(`
       SELECT *, VEC_DISTANCE(embedding, STRING_TO_VECTOR(?)) as distance
@@ -579,8 +579,8 @@ AFTER:   Session → StoragePort → SQLiteAdapter → BunDatabase
 **Key constraint**: This phase is a pure refactor. Tests must pass unchanged.
 The `SQLiteAdapter` wraps `Database.use()` exactly — same sync behavior.
 
-**PR strategy**: This is Phase 1 credibility work (kc-934). Small, mechanical,
-reviewable. Shows architectural thinking without functional change.
+**PR strategy**: Deliver as a small, mechanical, reviewable refactor.
+Demonstrates architectural thinking without functional change.
 
 ### Phase 1: Async Foundation
 
@@ -696,7 +696,7 @@ interface StorageConfig {
 This architecture positions Kilo for:
 
 1. **Team AI development**: Shared Dolt server, branch-per-developer, merge conversation insights
-2. **Cross-session knowledge**: Gold summaries searchable via ckd integration
+2. **Cross-session knowledge**: Gold summaries searchable via semantic search integration
 3. **Plugin ecosystem**: Storage hooks enable third-party integrations (Linear, GitHub, custom dashboards)
 4. **Memory problem solved**: Server-side filtering (Dolt/Postgres) eliminates GH#6442 entirely
 5. **Debuggability**: `dolt_diff` shows exactly what changed each turn — invaluable for agent debugging

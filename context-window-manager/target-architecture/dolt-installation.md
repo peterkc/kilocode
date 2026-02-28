@@ -6,7 +6,7 @@ Dolt should be as invisible as SQLite is today. Users don't think about
 SQLite — it just works. Dolt should be the same: auto-installed, auto-started,
 auto-managed. Power users CAN use `dolt` CLI to inspect, but it's never required.
 
-## Lessons from ACF Beads
+## Lessons from Prior Dolt Deployments
 
 | Lesson | Impact on Design |
 |--------|-----------------|
@@ -189,9 +189,7 @@ mode. This means Kilo must:
 ### Port Allocation Strategy
 
 **The problem**: A user might already have Dolt servers running:
-- ACF traces on port 3308
-- ACF beads on port 3309
-- ckd search on port 3307
+- Other Dolt servers may be running on nearby ports
 - Or any other service on common ports
 
 **The solution**: Dynamic port allocation with preference list.
@@ -542,7 +540,7 @@ Power users can upgrade to launchctl/systemd via `kilo db install-service`.
 interface ExistingDoltServer {
   port: number
   dataDir: string
-  owner: "kilo" | "acf" | "beads" | "unknown"
+  owner: "kilo" | "other" | "unknown"
   databases: string[]
 }
 
@@ -572,8 +570,8 @@ export async function detectExistingServers(): Promise<ExistingDoltServer[]> {
 
       let owner: ExistingDoltServer["owner"] = "unknown"
       if (dbNames.some((d: string) => d.startsWith("kilo_"))) owner = "kilo"
-      else if (dbNames.includes("traces")) owner = "acf"
-      else if (dbNames.some((d: string) => d.endsWith("_beads"))) owner = "beads"
+      // Detect other Dolt servers by the presence of non-Kilo databases
+      else if (dbNames.length > 1) owner = "other"
 
       servers.push({ port, dataDir: "unknown", owner, databases: dbNames })
       await conn.end()
@@ -747,7 +745,7 @@ The user sees a one-time warning, and everything works on SQLite.
 | **New user, no Dolt** | Auto-download from GitHub | Kilo-managed, detached | Dynamic (default 3307) | Zero-config |
 | **User has Dolt (brew)** | System PATH | Kilo-managed, system binary | Dynamic | Zero-config |
 | **User has Dolt server** | System PATH | User's server (`managed: false`) | User's port | `kilo.json` |
-| **ACF/beads user** | System PATH | Own server (different port) | Dynamic (avoids 3308/3309) | Auto-detected |
+| **Existing Dolt user** | System PATH | Own server (different port) | Dynamic (avoids conflicts) | Auto-detected |
 | **Team deployment** | System install | Shared server | Configured | `kilo.json` |
 | **Restricted env** | N/A | N/A | N/A | Falls back to SQLite |
 | **Windows** | Auto-download zip | Kilo-managed | Dynamic | Zero-config |

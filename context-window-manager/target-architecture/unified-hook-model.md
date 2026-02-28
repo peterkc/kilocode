@@ -209,7 +209,7 @@ interface LifecycleHooks {
 ```
 
 **Why `compact.pre` matters for Dolt**: This is where the adapter commits the
-pre-compaction state. Like ACF's PreCompact hook, it ensures the full history
+pre-compaction state. Like a pre-compaction lifecycle hook, it ensures the full history
 is preserved in Dolt's commit log before the working set is pruned.
 
 **Why `compact.post` matters for Gold**: The summary text and prune stats feed
@@ -435,8 +435,8 @@ All lifecycle events are NEW hook names. No existing plugin breaks.
 ### Phase 0 (Can Ship Independently)
 
 The lifecycle events don't require the StoragePort refactor. They can be added
-to the current codebase as a standalone PR. This makes them Phase 1 credibility
-material (kc-934) — adding observability without changing storage.
+to the current codebase as a standalone PR — a standalone observability improvement
+that adds value without changing storage.
 
 ## External Hook Execution (Optional Future)
 

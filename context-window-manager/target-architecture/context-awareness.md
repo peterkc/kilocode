@@ -28,7 +28,7 @@ What we need:     [─── Green ───|── Yellow ──|─ Orange ─
 
 ## Current State of the Art
 
-### ACF Approach (context-usage-hook.py)
+### Prior Art: External Context Tracking
 
 - Fires on PostToolUse for Bash/Write/Edit/NotebookEdit only
 - Parses the full transcript JSONL to compute token counts
@@ -563,9 +563,9 @@ WHERE id = ?;
 
 True pruning (not just flagging) because Dolt versioning preserves the data.
 
-## Comparison: ACF vs Proposed
+## Comparison: Prior Art vs Proposed
 
-| Dimension | ACF (context-usage-hook.py) | Proposed (context.update) |
+| Dimension | Prior art (external hook) | Proposed (context.update) |
 |-----------|---------------------------|--------------------------|
 | Data source | Parse full transcript JSONL | Token data from LLM response (already available) |
 | Firing | 4 specific tool types only | Every LLM step finish |

@@ -206,7 +206,7 @@ The view definition IS the context composition policy. Changes to policy = ALTER
 # ~/.config/dolt/server.yaml (or launchctl-managed)
 listener:
   host: 127.0.0.1
-  port: 3307  # Separate from ACF's 3308/3309
+  port: 3307  # Use a port not in use by other services
   max_connections: 50
 performance:
   query_parallelism: 4
@@ -251,7 +251,7 @@ databases:
 | Token overhead (pointers vs inline) | Each tool part's state.output can be 1K-100K tokens. A Dolt ref + summary would be ~50-100 tokens. **100-1000x reduction per tool call** |
 | Retrieval latency | Dolt server indexed queries: <10ms. Current SQLite batch-50 pattern: ~5ms per batch but loads ALL data. Net: Dolt faster for filtered queries |
 | Summary quality | Compaction already produces LLM summaries. Pointer model adds Dolt refs alongside. No quality degradation — same summaries, just stored differently |
-| ckd integration | ckd's Dolt tables could share the same server. Semantic search over tool branches for relevance-based context composition |
+| Semantic search integration | Other Dolt-backed tools could share the same server. Semantic search over tool branches for relevance-based context composition |
 | Multi-agent composition | Dolt branches provide native isolation. Merge semantics are well-defined. Current parent_id FK is already the right relationship model |
 
 ## Next Steps
