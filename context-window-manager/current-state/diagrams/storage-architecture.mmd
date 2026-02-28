@@ -1,0 +1,61 @@
+%% Kilo Code: Context Management & Storage Architecture
+%% Shows data flow from user input through storage, compaction, and LLM
+
+flowchart TB
+    subgraph User["User Input"]
+        UI["TUI / VSCode / Desktop"]
+        UserMsg["User Message"]
+    end
+
+    subgraph SessionLoop["SessionPrompt.loop() — Main Chat Loop"]
+        direction TB
+        FilterCompacted["filterCompacted()
+        Walk messages DESC
+        Stop at compaction boundary"]
+
+        OverflowCheck["isOverflow()
+        tokens >= context_limit - reserved
+        reserved = min(20K, maxOutputTokens)"]
+
+        SystemPrompt["SystemPrompt.environment()
+        + InstructionPrompt.system()
+        Model info, cwd, AGENTS.md"]
+
+        ToModel["toModelMessages()
+        Convert WithParts[] to ModelMessage[]
+        Compacted parts -> placeholder text"]
+
+        LLMCall["LLM.stream() -> Vercel AI SDK
+        streamText() -> Provider API"]
+
+        Processor["SessionProcessor
+        Handle stream events
+        Write parts to DB in real-time"]
+    end
+
+    subgraph Storage["SQLite Storage (Drizzle ORM)"]
+        direction TB
+        DB[("kilo.db — WAL mode, 64MB cache, BunDatabase")]
+        SessionTable["SessionTable"]
+        MessageTable["MessageTable"]
+        PartTable["PartTable — state.output NEVER CLEARED"]
+    end
+
+    subgraph Compaction["Compaction Pipeline"]
+        direction TB
+        Create["SessionCompaction.create()"]
+        Process["SessionCompaction.process() — LLM summary"]
+        Prune["SessionCompaction.prune() — flag, don't clear"]
+    end
+
+    UI --> UserMsg
+    UserMsg --> FilterCompacted
+    FilterCompacted --> OverflowCheck
+    OverflowCheck --> |"No overflow"| SystemPrompt
+    OverflowCheck --> |"Overflow!"| Create
+    SystemPrompt --> ToModel
+    ToModel --> LLMCall
+    LLMCall --> Processor
+    Processor --> PartTable
+    Create --> Process
+    FilterCompacted -.-> Prune

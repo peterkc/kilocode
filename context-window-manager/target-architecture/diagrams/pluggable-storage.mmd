@@ -1,0 +1,34 @@
+%% Target Architecture: Pluggable Storage with Medallion Data Lifecycle
+%% Shows ports, adapters, medallion layers, and composition root
+
+flowchart TB
+    subgraph App["Application Layer (No Adapter Imports)"]
+        Session["Session Module"]
+        Agent["Agent Module"]
+        Compaction["Compaction Module"]
+        Plugin["Plugin System — 13 existing + NEW storage hooks"]
+    end
+
+    subgraph Ports["Storage Port (Interface Contract)"]
+        Base["StoragePort (Base) — REQUIRED"]
+        Versioned["VersionedStorage (Optional) — Dolt, Postgres+temporal"]
+        Branching["BranchingStorage (Optional) — Dolt only"]
+        Searchable["SearchableStorage (Optional) — Dolt+ckd, Postgres+pgvector"]
+        Hookable["HookableStorage (Optional) — All backends"]
+    end
+
+    subgraph Adapters["Storage Adapters"]
+        SQLite["SQLiteAdapter — Base only"]
+        Dolt["DoltAdapter — Base + Versioned + Branching + Searchable + Hookable"]
+        Postgres["PostgresAdapter — Base + Searchable + Hookable"]
+    end
+
+    subgraph Medallion["Data Lifecycle (Medallion Pattern)"]
+        Bronze["Bronze — Raw message + part rows"]
+        Silver["Silver — SQL Views (v_active_context, v_tool_calls)"]
+        Gold["Gold — Compaction summaries, embeddings"]
+    end
+
+    App --> Ports
+    Ports --- Adapters
+    Bronze --> Silver --> Gold

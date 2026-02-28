@@ -1,0 +1,28 @@
+%% Progressive Disclosure: Tool Output Tiers
+%% Three-tier model: inline, summary+ref, reference-only
+
+flowchart TB
+    subgraph Current["Current: Everything In Context"]
+        direction LR
+        T1C["Tool executes"] --> T2C{"≤ 50KB?"}
+        T2C --> |"YES"| T3C["Full output in context (~12500 tokens)"]
+        T2C --> |"NO"| T4C["Truncated head + temp file (~2000 tokens)"]
+    end
+
+    subgraph Proposed["Proposed: Three-Tier Progressive Disclosure"]
+        direction LR
+        T1P["Tool executes"] --> T2P{"Output size?"}
+        T2P --> |"≤1KB"| Tier1["Tier 1: INLINE — ~200 tokens"]
+        T2P --> |"1-50KB"| Tier2["Tier 2: SUMMARY + REF — ~300 tokens"]
+        T2P --> |">50KB"| Tier3["Tier 3: REF ONLY — ~200 tokens"]
+    end
+
+    subgraph Storage["Full Output in Dolt"]
+        Dolt[("Dolt Branch — tool/read-abc123
+        Queryable, versioned, prunable")]
+        Retrieve["retrieve tool — on-demand detail"]
+    end
+
+    Tier2 --> Dolt
+    Tier3 --> Dolt
+    Dolt --> Retrieve

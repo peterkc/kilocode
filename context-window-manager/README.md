@@ -3,39 +3,50 @@
 Research into replacing flat conversation history with a branching, pointer-based
 context management system backed by Dolt.
 
-## Status: Active — Code mapping complete, migration analysis drafted
+## Status: Active
 
-### Research Artifacts
+Session history: `58f6803b` (2026-02-28), continuing from `8e491163` (2026-02-28).
 
-| File | Contents |
-|------|----------|
-| [README.md](README.md) | Vision, design principles, prior art |
-| [sqlite-code-map.md](sqlite-code-map.md) | Deep mapping of all SQLite touch points, schema, data flow, compaction pipeline |
-| [dolt-migration-analysis.md](dolt-migration-analysis.md) | Migration strategy (Strangler Fig), risk assessment, file-by-file impact, Dolt opportunities |
+## Research Map
 
-### Diagrams (Mermaid)
+### Current State Analysis
 
-Three validated Mermaid diagrams created in session 58f6803b:
-1. **Context Management & Storage Architecture** — Full data flow from user input through storage, compaction, LLM
-2. **SQLite Touch Points (Migration Surface)** — All callers that access SQLite, the DAL abstraction
-3. **Proposed Dolt Architecture** — Side-by-side current vs proposed with migration path
+Understanding how Kilo Code manages context today.
 
-## Problem Statement
+| Artifact | Contents |
+|----------|----------|
+| [current-state/sqlite-code-map.md](current-state/sqlite-code-map.md) | All 8 SQLite tables, 7 callers, compaction pipeline, GH#6442 root cause chain |
+| [current-state/diagrams/](current-state/diagrams/) | Mermaid source: storage architecture, SQLite touch points |
 
-CLI AI agents (Kilo Code, Claude Code, Gemini CLI) manage conversation history as
-an append-only log with bolt-on compaction. This causes:
+### Target Architecture
 
-- **Memory fragmentation** (Kilo #6442): full re-hydration of tool outputs into JS heap
-  every LLM round. 8.1 GB footprint, 85 MB live data, 80:1 waste ratio.
-- **Unbounded growth**: session history grows with every tool call. Compaction marks
-  data as "old" but doesn't remove it from storage or prevent re-loading.
-- **Brittle revert**: hand-rolled revert systems (40+ lines in Kilo's `revert.ts`)
-  that don't compose with compaction.
-- **Context pollution**: subagent research, verbose tool outputs, and intermediate
-  results all compete for the same flat context window.
+Where we're going: pluggable storage, lifecycle hooks, progressive disclosure.
 
-Every CLI tool reinvents this. The fix is always the same shape: summarize old stuff,
-truncate, hope for the best. None of them treat it as a data management problem.
+| Artifact | Contents |
+|----------|----------|
+| [target-architecture/pluggable-storage.md](target-architecture/pluggable-storage.md) | StoragePort interfaces (Base, Versioned, Branching, Searchable, Hookable), medallion data lifecycle (Bronze/Silver/Gold), adapter implementations, composition root, 5-phase migration path |
+| [target-architecture/unified-hook-model.md](target-architecture/unified-hook-model.md) | 14 new lifecycle events modeled after Claude Code + 13 existing transform hooks. Gap analysis vs Claude Code. Plugin.trigger (transforms) vs Plugin.emit (lifecycle) dispatch model |
+| [target-architecture/context-awareness.md](target-architecture/context-awareness.md) | Real-time context intelligence: 5-zone classification, trend analysis, composition breakdown, smart compaction strategies. Multi-model awareness (mid-conversation model switching, worstCaseZone, cross-model token estimation) |
+| [target-architecture/progressive-disclosure.md](target-architecture/progressive-disclosure.md) | Three-tier tool output model (inline ≤1KB, summary+ref 1-50KB, reference-only >50KB). Per-tool summarization strategies. 84% context token savings. Dolt branch-per-tool storage |
+| [target-architecture/diagrams/](target-architecture/diagrams/) | Mermaid source: pluggable storage, unified hooks, progressive tiers |
+
+### Migration Strategy
+
+How to get from current state to target architecture.
+
+| Artifact | Contents |
+|----------|----------|
+| [migration/dolt-migration-analysis.md](migration/dolt-migration-analysis.md) | 4-phase Strangler Fig strategy (interface extraction → dual-write → read-switch → remove SQLite). Async refactor analysis (~100 call sites). File-by-file migration impact. Risk matrix |
+
+## Design Sources
+
+Three codebases inform this architecture:
+
+| Source | Pattern Borrowed | Applied As |
+|--------|-----------------|------------|
+| **ckd** (Hexagonal) | Ports & Adapters, optional interface probing, composition root | `StoragePort` base + optional capabilities |
+| **ACF Traces** (Medallion) | Bronze → Silver → Gold data lifecycle, hook-driven capture | Messages (Bronze) → SQL Views (Silver) → Compaction summaries (Gold) |
+| **Claude Code** (Hooks) | Lifecycle events with rich payloads, context injection | 14 new lifecycle events for full conversation tracing |
 
 ## Core Idea: Conversation as a Git DAG
 
@@ -44,138 +55,81 @@ trunk (context window)         branches (off-context work)
 ─────────────────────         ────────────────────────────
 user: "fix the auth bug"
   │
-  ├──branch──> [research: grep auth, read 5 files, analyze]
-  │               └── results stored in Dolt, branch closed
+  ├──branch──> [read: src/auth.ts, 500 lines]
+  │               └── tool/read-abc → full content in Dolt
   │
-  ◄──merge───  ptr: {dolt_ref: "branch/auth-research", summary: "3 files relevant..."}
+  ◄──merge───  summary: "auth.ts: 500 lines, exports AuthProvider, LoginForm.
+  │            Key sections: L1-20 imports, L22-80 AuthProvider, L82-150 LoginForm"
   │
-assistant: "Found the issue in auth.ts:42..."
+agent: "I see AuthProvider. Let me read the relevant section."
   │
-  ├──branch──> [tool: edit file, run tests, 500 lines output]
-  │               └── full output in Dolt, branch closed
+  ├──inline──> [read: src/auth.ts --offset=22 --limit=58]
+  │               └── 58 lines, ~1KB → Tier 1, inline
   │
-  ◄──merge───  ptr: {dolt_ref: "branch/edit-001", summary: "tests pass, 2 files changed"}
+agent: "Found the bug at line 45. Fixing..."
   │
-assistant: "Fixed. All tests pass."
+  ├──branch──> [bash: npm test, 1200 lines output]
+  │               └── tool/bash-def → full output in Dolt
+  │
+  ◄──merge───  summary: "npm test: 47 passed, 0 failed. Exit 0. 8.2s"
 ```
 
-**Trunk** = what the model sees (context window). Only pointers and summaries.
-**Branches** = full data from research, tool calls, subagents. Stored in Dolt.
-**Merge** = pointer + summary comes back to trunk. Full data queryable on demand.
+**Trunk** = what the model sees (only summaries and pointers).
+**Branches** = full data from tool calls, stored in Dolt.
+**Progressive disclosure** = agent requests detail on demand via refs.
 
-## Design Principles
+## Key Design Decisions
 
-### 1. Trunk Never Holds Heavy Payloads
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Backend abstraction | Ports & Adapters (ckd pattern) | App layer never imports adapters. Swap via composition root |
+| Optional capabilities | Interface probing, not stubs | `if (isBranching(storage))` — zero lies, zero stubs |
+| Hook model | Lifecycle + Transform (dual pipeline) | Claude Code model for tracing, Kilo model for behavior shaping |
+| Context awareness | Model-relative zones with worstCaseZone | Multi-model sessions need per-model projections |
+| Tool output | Three-tier progressive disclosure | 84% token savings. Trunk stays small |
+| Data lifecycle | Bronze/Silver/Gold medallion | ACF traces pattern, proven in production |
+| Migration | Strangler Fig (4 phases) | Non-breaking, incremental, dual-write safety net |
 
-Tool outputs, file contents, test results — all go to branches. The trunk gets a
-pointer (Dolt ref) and a summary. The context window stays small and focused.
+## Problem Statement
 
-This directly solves #6442: no bulk string re-hydration because the strings aren't
-in the conversation history. They're in Dolt, queryable via SQL when needed.
+CLI AI agents manage conversation history as append-only logs with bolt-on compaction:
 
-### 2. Variables, Not Flat History
+- **Memory fragmentation** (Kilo #6442): 8.1GB footprint, 85MB live, 80:1 waste ratio
+- **Unbounded growth**: tool outputs stored forever, only flagged as "old"
+- **Brittle revert**: hand-rolled in 40+ lines, doesn't compose with compaction
+- **Context pollution**: every tool call dumps up to 50KB into the conversation
+- **No intelligence**: binary compaction (full? compact!) with no gradient
 
-Research on improving LLM context utilization (MemGPT/Letta, context distillation)
-shows that named storage outperforms flat conversation history. Instead of:
+## Research Questions
 
-```
-[message 1] [message 2] [tool output 3] [message 4] [tool output 5] ...
-```
-
-Use named variables backed by Dolt tables:
-
-```
-working_memory:  {current task, recent decisions, active constraints}
-tool_results:    SELECT * FROM tool_calls WHERE session_branch = 'current' ORDER BY ts DESC LIMIT 5
-file_context:    SELECT content FROM file_snapshots WHERE path IN (active_files)
-research:        SELECT summary FROM research_branches WHERE session = current AND relevance > 0.7
-```
-
-The context window is *composed* from these sources each round, not *accumulated*.
-
-### 3. Dolt Is the Native Substrate
-
-Why Dolt, not just any DB:
-
-| Capability | How It's Used |
-|------------|---------------|
-| Branching | Each subagent/tool call gets a branch. No cross-contamination |
-| Merge | Results come back to trunk branch as structured data |
-| Time-travel (`AS OF`) | Revert to any conversation state — no hand-rolled revert.ts |
-| Diff (`dolt_diff`) | Show what changed between rounds — debuggability for free |
-| Server mode | Wire protocol avoids in-process heap allocation entirely |
-| SQL | Context composition is just queries, not imperative code |
-
-### 4. Compaction Is Branch Pruning
-
-Instead of marking old tool outputs with `time.compacted` and hoping they don't
-get re-loaded (Kilo's current approach):
-
-```sql
--- Compaction = drop old branches
-CALL DOLT_BRANCH('-D', 'tool/read-file-001');
-CALL DOLT_BRANCH('-D', 'tool/read-file-002');
--- Pointers on trunk still exist, summaries preserved
--- Full data is gone. GC reclaims storage.
-```
-
-No fragmentation. No "accidentally recoverable" data. Clean lifecycle.
+- [x] Map Kilo's SQLite surface → [sqlite-code-map.md](current-state/sqlite-code-map.md)
+- [x] Identify migration surface → [dolt-migration-analysis.md](migration/dolt-migration-analysis.md)
+- [x] Design pluggable storage → [pluggable-storage.md](target-architecture/pluggable-storage.md)
+- [x] Design hook system → [unified-hook-model.md](target-architecture/unified-hook-model.md)
+- [x] Design context awareness → [context-awareness.md](target-architecture/context-awareness.md)
+- [x] Design progressive disclosure → [progressive-disclosure.md](target-architecture/progressive-disclosure.md)
+- [ ] Survey MemGPT/Letta architecture for variable-storage patterns
+- [ ] Prototype StoragePort interface extraction (Phase 0)
+- [ ] Benchmark Dolt server-mode query latency for session-scoped queries
+- [ ] Prototype structured summaries for read/bash tools (Phase 2 of progressive disclosure)
+- [ ] Test Drizzle mysql2 driver with Dolt compatibility
+- [ ] Evaluate Dolt embedded mode (no server process)
+- [ ] Measure token savings (pointer+summary vs full output in context)
 
 ## Prior Art
 
 | System | Approach | Limitation |
 |--------|----------|------------|
-| **MemGPT / Letta** | Virtual memory hierarchy (main ctx = registers, archival = disk) | No versioning, no branching, custom storage |
-| **Gemini CLI** | Tool output masking + chat compression (replace chat object) | Solves memory but loses data. No queryable history |
+| **MemGPT / Letta** | Virtual memory hierarchy | No versioning, no branching |
+| **Gemini CLI** | Tool output masking + compression | Loses data, no queryable history |
 | **Kilo Code** | SQLite + compaction + prune | #6442 — doesn't work for long sessions |
-| **Claude Code** | Auto-compression of prior messages | Lossy, no structured recall |
-| **LangGraph** | Checkpoint-based state with branching | Closest to this model, but no Dolt-native versioning |
-
-## Research Questions
-
-1. **Token overhead of pointers vs inline**: How much context window space do Dolt refs
-   + summaries consume vs full tool outputs? Hypothesis: 10-50x reduction.
-
-2. **Retrieval latency**: Can Dolt server-mode queries return relevant context fast
-   enough for the LLM round-trip? Target: <100ms per composition query.
-
-3. **Summary quality**: Does pointer-based context degrade model performance vs full
-   history? Need benchmarks on task completion with truncated vs pointer-based context.
-
-4. **ckd integration**: Can ck-dolt's graph search power semantic context selection?
-   "Which past branches are relevant to the current question?" is a search problem.
-
-5. **Multi-agent composition**: When parallel subagents each have their own branches,
-   how does the orchestrator merge results? Conflict resolution semantics.
-
-## Connection to ACF Stack
-
-| Component | Role in Context Manager |
-|-----------|------------------------|
-| **Dolt** | Storage engine — versioned, branching, server-mode |
-| **ckd** | Semantic search over branch contents — relevance-based context selection |
-| **bdx** | Session/issue tracking — branches link to beads issues |
-| **ACF traces** | Telemetry — token budgets, tool call patterns inform composition policy |
-| **ax** (future) | The CLI that ships this as its native context manager |
-
-## Next Steps
-
-- [ ] Survey MemGPT/Letta architecture for variable-storage patterns
-- [ ] Prototype: single Dolt branch per tool call in an ACF session
-- [ ] Measure token savings (pointer+summary vs full output in context)
-- [ ] Evaluate ckd graph queries for relevance-based context composition
-- [x] Map Kilo's `compaction.ts` / `message-v2.ts` to Dolt branch equivalents → See [sqlite-code-map.md](sqlite-code-map.md)
-- [x] Identify all SQLite callers and migration surface → See [dolt-migration-analysis.md](dolt-migration-analysis.md)
-- [ ] Prototype StorageBackend interface extraction (Phase 0 of migration)
-- [ ] Benchmark Dolt server-mode query latency for session-scoped queries
-- [ ] Audit all Database.use() call sites for sync-dependency risks
-- [ ] Test Drizzle mysql2 driver with Dolt (verify compatibility)
-- [ ] Evaluate Dolt embedded mode as fallback (no server process needed)
+| **Claude Code** | Auto-compression | Lossy, no structured recall |
+| **LangGraph** | Checkpoint-based with branching | No Dolt-native versioning |
 
 ## Sources
 
-- [Kilo #6442](https://github.com/Kilo-Org/kilocode/issues/6442) — bmalloc fragmentation from unbounded session history
-- [Gemini CLI compression](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/services/chatCompressionService.ts) — chat object replacement
+- [Kilo #6442](https://github.com/Kilo-Org/kilocode/issues/6442) — bmalloc fragmentation
+- [Gemini CLI compression](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/services/chatCompressionService.ts)
 - [MemGPT paper](https://arxiv.org/abs/2310.08560) — virtual context management for LLMs
-- [Kilo compaction.ts](https://github.com/Kilo-Org/kilocode/blob/main/packages/opencode/src/session/compaction.ts) — current pruning approach
+- [Kilo compaction.ts](https://github.com/Kilo-Org/kilocode/blob/main/packages/opencode/src/session/compaction.ts)
 - [ACF traces architecture](https://github.com/peterkc/acf) — Dolt-backed session telemetry
