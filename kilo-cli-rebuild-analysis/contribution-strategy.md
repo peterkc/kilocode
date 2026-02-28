@@ -42,26 +42,40 @@ Target:   Dolt (versioned, multi-project, team-shared) + native skills + local+c
 ### Phase 1: Credibility (Weeks 1-3)
 
 **Goal**: Get 2-3 PRs merged to establish contributor reputation.
-**Rubric**: ADR-0001 (score >= 6 to pursue, >= 8 = high priority)
+**Rubric**: ADR-4001 (score >= 6 to pursue, >= 8 = high priority)
 
-**Tier 1 — High confidence (score >= 8):**
+> **2026-02-25 audit**: 5 of 7 original candidates were resolved/irrelevant for the new CLI.
+> The ground-up CLI rebuild (Bun + Vercel AI SDK + models.dev) resolved many old extension bugs.
+> See kc-9uu, kc-qcq, kc-njd, kc-83y close reasons for details.
 
-| Issue | Title | Score | Beads |
-|-------|-------|-------|-------|
-| #3545 | Anthropic custom model names | 8 (demand:2 scope:1 avail:2 align:2 signal:1) | kc-9uu |
-| #4331 | Ollama Cloud regression | 8 (demand:2 scope:1 avail:2 align:2 signal:1) | kc-TODO |
-| #6018 | Gemini thought_signature | 8 (demand:1 scope:2 avail:2 align:2 signal:1) | kc-TODO |
+**Tier 1 — First PR target:**
 
-**Tier 2 — Solid picks (score = 6):**
+| Issue | Title | Score | Beads | Status |
+|-------|-------|-------|-------|--------|
+| #6018 | Gemini thought_signature | 9 (demand:2 scope:2 avail:2 align:2 signal:1) | kc-nm7 | **ACTIVE** |
 
-| Issue | Title | Score | Beads |
-|-------|-------|-------|-------|
-| #6046 | Snapshot git gc (68GB growth) | 6 (demand:0 scope:2 avail:2 align:1 signal:1) | kc-TODO |
-| #3608 | Bedrock/Vertex native tool calls | 6 (demand:0 scope:0 avail:2 align:2 signal:2) | kc-TODO |
-| #6026 | Show x-request-id in errors | 6 (demand:0 scope:2 avail:2 align:1 signal:1) | kc-TODO |
-| #6051 | Broken link Speech Recognition | 6 (demand:0 scope:2 avail:2 align:0 signal:2) | kc-TODO |
+3-file fix across provider/session layers. Demonstrates system-level thinking through
+message lifecycle, providerMetadata preservation, and SDK contract understanding.
+Touches provider abstraction layer where Phase 2/3 influence matters.
 
-**Pattern**: 4 of 7 candidates are provider-layer work — builds knowledge for Phase 2 plugins.
+**Tier 2 — Follow-up PRs:**
+
+| Issue | Title | Score | Beads | Status |
+|-------|-------|-------|-------|--------|
+| #6046 | Snapshot gc (68GB legacy dir) | 6 (demand:0 scope:2 avail:2 align:1 signal:1) | kc-6ov | Open |
+| #6026 | Show x-request-id in errors | 6 (demand:0 scope:2 avail:2 align:1 signal:1) | kc-4tr | Open |
+| #6310 | Mouse scroll cycles history | 5 (demand:0 scope:1 avail:2 align:1 signal:1) | kc-e2d | Open |
+
+**Closed (resolved in new CLI architecture):**
+
+| Issue | Title | Reason | Beads |
+|-------|-------|--------|-------|
+| #3545 | Anthropic custom model names | Dynamic models.dev registry | kc-9uu (closed) |
+| #4331 | Ollama Cloud regression | VSCode-only, no Ollama in CLI | kc-qcq (closed) |
+| #3608 | Bedrock/Vertex native tools | Native AI SDK providers | kc-njd (closed) |
+| #6051 | Broken link Speech Rec | Two PRs already submitted | kc-83y (closed) |
+
+**Lesson**: Always verify issue roster against CURRENT codebase before speccing.
 
 ### Phase 2: Plugin Ecosystem (Weeks 4-8)
 
@@ -88,30 +102,80 @@ These ship as npm packages (`@peterkc/kilo-local-search`, etc.) installable via 
 | Plugin bus publish capability | Event hook usage patterns | Add Bus reference to PluginInput |
 | Native skill protocol | Skill tool usage + SKILL.md limitations | Binary/WASM skill loading (D15) |
 
-## Community Signal Summary
+## Team Intelligence (verified 2026-02-27)
 
-### Highest-Demand Issues (by reactions)
+### Actual Team (COLLABORATOR status via GraphQL)
 
-| Reactions | Issue | Theme |
-|-----------|-------|-------|
-| 19 | #3545 Anthropic-compatible API | Provider flexibility |
-| 17 | #4331 Ollama Cloud broken | Local LLM regression |
-| 16 | #5460 Gemini CLI provider removed | Provider removal |
-| 15 | #3063 Import settings from VSCode | Onboarding |
-| 12 | #3679 Shift+Enter newline | UX regression |
-| 10 | #1678 Codebase indexing stuck at 0% | Core feature broken |
+| Login | Focus | Reviews externals? |
+|-------|-------|-------------------|
+| marius-kilocode | Agent Manager, VSCode extension | No — self-merges features |
+| kevinvandijk | CLI lead, releases, providers, upstream sync | **Yes — primary external reviewer** |
+| chrarnoldus | Backend — gateway, models, provider config | Yes — bot PRs, backend |
+| iscekic | VSCode — sessions, URI handler | Occasionally |
 
-### Team Direction (from recent team-filed issues)
+### Trusted External Contributors (CONTRIBUTOR, self-merge rights)
+
+| Login | Focus | Note |
+|-------|-------|------|
+| markijbema | CLI features, CI, dev tooling | 8 PRs in last 80 merged |
+| catrielmuller | Build/CI, binary, infra | 7 PRs, self-merges |
+| lambertjosh | Docs, design, product | 5 PRs, self-merges |
+| olearycrew | DevRel, docs, community | 2 PRs |
+
+### Trust Ladder
+
+NONE → CONTRIBUTOR → trusted CONTRIBUTOR (self-merge) → COLLABORATOR
+
+Olusammytee (18 issue-closing PRs) and Githubguy132010 (10) are on the path up.
+Our PR #6368 establishes us as CONTRIBUTOR.
+
+### Merge Patterns
+
+- **Volume**: ~20 PRs/day, accelerating (4/day late Jan → 30/day late Feb)
+- **Speed**: Same-day turnaround typical. If not picked up in a week, likely won't be
+- **Schedule**: Mon-Sat active, Sun near-zero. Peak: 10-16 UTC
+- **Team builds features; community fixes bugs** — clear division of labor
+- **Self-merge is the reward** for consistent quality contributions
+
+### What Gets Merged from Externals
+
+- **High merge probability**: Provider/config bugs (model IDs, field stripping, limits), docs fixes, CI/tooling
+- **Medium**: CLI UX bugs with clear repro, MCP config issues
+- **Low**: Deep architecture changes (team owns those), large features, vague reports
+- Issue-first policy: all PRs must reference existing issue
+- Conventional commit format expected
+
+### What Predicts Review Attention
+
+| Factor | Weight |
+|--------|--------|
+| kevinvandijk sees it | Critical — merges 60%+ of external PRs |
+| Issue has `kilo-triaged` label | High — team acknowledged it |
+| Small, mechanical fix (1-3 files) | High |
+| Bug, not feature | High |
+| `blocking` label | Medium-High |
+| `good first issue` / `contributor` label | Medium |
+| Clean conventional commit | Expected |
+
+### Community Signal Summary
+
+#### Highest-Demand Issues (by reactions)
+
+| Reactions | Issue | Theme | Status |
+|-----------|-------|-------|--------|
+| 19 | #3545 Anthropic-compatible API | Provider flexibility | Resolved in new CLI |
+| 17 | #4331 Ollama Cloud broken | Local LLM regression | Resolved in new CLI |
+| 16 | #5460 Gemini CLI provider removed | Provider removal | Team decision, contested |
+| 15 | #3063 Import settings from VSCode | Onboarding | Large feature, Phase 2 |
+| 12 | #3679 Shift+Enter newline | UX regression | — |
+| 10 | #1678 Codebase indexing stuck at 0% | Core feature broken | — |
+
+#### Team Direction (from recent team-filed issues)
 
 - Provider routing in CLI (#6312, #6315)
 - MemoryBank migration (#6091)
 - Agent-scoped MCP filtering (#6060)
 - Agent Manager features (diff viewer, image paste, session import)
-
-### What Gets Merged from Externals
-
-Precise bug fixes, docs, CI/tooling. No large feature PRs from externals in recent history.
-Issue-first policy: all PRs must reference existing issue.
 
 ## Contribution Workflow
 
@@ -131,8 +195,25 @@ git push origin fix/description
 gh pr create --repo Kilo-Org/kilocode --base main
 ```
 
-## Decision: First PR Target
+## Phase 1 Execution Status (2026-02-27)
 
-**#3545 Anthropic-compatible custom model names** — 19 reactions, well-scoped to model name handling,
-clear user demand, matches our provider flexibility values. This establishes us as a contributor
-who fixes real user pain, not a drive-by feature requester.
+### Approach: Triage-First
+
+Investigate all candidates thoroughly before submitting PRs. Quality triage comments
+build credibility and demonstrate codebase understanding. Systematic PR creation follows.
+
+### Active PR
+- **#6018** (PR #6368) — Gemini thoughtSignature test coverage. Bot recommends merge.
+
+### PR Candidate
+- **#6277** — Sidebar context % uses `limit.context` instead of `limit.input`. 3-5 line fix.
+
+### Confirmed Already Fixed (triage value: comments demonstrate expertise)
+- **#6443** — temperature:0 default. Fixed in 0c7f0cfa2e (v1.0.13).
+- **#6248** — read_file OOB. Resolved by v7.x architecture migration. Cross-issue cluster posted.
+
+### Pending Investigation (8 issues, dedicated sessions each)
+See kc-934 epic notes for batch plan and investigation goals.
+
+### Superseded
+- ~~#3545~~ — Resolved in new CLI (dynamic models.dev registry).
