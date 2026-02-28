@@ -3,7 +3,22 @@
 Research into replacing flat conversation history with a branching, pointer-based
 context management system backed by Dolt.
 
-## Status: Seed
+## Status: Active — Code mapping complete, migration analysis drafted
+
+### Research Artifacts
+
+| File | Contents |
+|------|----------|
+| [README.md](README.md) | Vision, design principles, prior art |
+| [sqlite-code-map.md](sqlite-code-map.md) | Deep mapping of all SQLite touch points, schema, data flow, compaction pipeline |
+| [dolt-migration-analysis.md](dolt-migration-analysis.md) | Migration strategy (Strangler Fig), risk assessment, file-by-file impact, Dolt opportunities |
+
+### Diagrams (Mermaid)
+
+Three validated Mermaid diagrams created in session 58f6803b:
+1. **Context Management & Storage Architecture** — Full data flow from user input through storage, compaction, LLM
+2. **SQLite Touch Points (Migration Surface)** — All callers that access SQLite, the DAL abstraction
+3. **Proposed Dolt Architecture** — Side-by-side current vs proposed with migration path
 
 ## Problem Statement
 
@@ -149,7 +164,13 @@ No fragmentation. No "accidentally recoverable" data. Clean lifecycle.
 - [ ] Prototype: single Dolt branch per tool call in an ACF session
 - [ ] Measure token savings (pointer+summary vs full output in context)
 - [ ] Evaluate ckd graph queries for relevance-based context composition
-- [ ] Map Kilo's `compaction.ts` / `message-v2.ts` to Dolt branch equivalents
+- [x] Map Kilo's `compaction.ts` / `message-v2.ts` to Dolt branch equivalents → See [sqlite-code-map.md](sqlite-code-map.md)
+- [x] Identify all SQLite callers and migration surface → See [dolt-migration-analysis.md](dolt-migration-analysis.md)
+- [ ] Prototype StorageBackend interface extraction (Phase 0 of migration)
+- [ ] Benchmark Dolt server-mode query latency for session-scoped queries
+- [ ] Audit all Database.use() call sites for sync-dependency risks
+- [ ] Test Drizzle mysql2 driver with Dolt (verify compatibility)
+- [ ] Evaluate Dolt embedded mode as fallback (no server process needed)
 
 ## Sources
 
