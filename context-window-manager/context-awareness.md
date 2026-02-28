@@ -52,6 +52,33 @@ agent's decision-making.
 
 ## Proposed: Context Intelligence System
 
+### Multi-Model Awareness (Critical Design Constraint)
+
+Kilo Code supports mid-conversation model switching via:
+- `local.model.cycle(1/-1)` — keybind to cycle through recent models
+- `local.model.cycleFavorite(1/-1)` — cycle favorites
+- `local.model.set({providerID, modelID})` — command palette selection
+
+Model is resolved **per-turn** at `prompt.ts:1014`:
+```typescript
+const model = input.model ?? agent.model ?? (await lastModel(sessionID))
+```
+
+Each user message records its model: `msg.model = {providerID, modelID}`.
+The effective context limit changes whenever the user switches models.
+
+**Impact on context awareness:**
+
+| Problem | Example | Solution |
+|---------|---------|----------|
+| Zone instability | 140K used: 70% on Claude 200K, 109% on GPT-4o 128K | Use absolute tokens + per-model zone calculation |
+| Trend analysis breaks | Growth rate computed on Claude, applied to GPT-4o | Track tokens per turn (model-independent) + project per-model |
+| Composition varies | Same text = different token count per tokenizer | Store raw character count, estimate per model on demand |
+| Sudden overflow | Switch from 1M Gemini to 128K GPT-4o triggers instant compact | Pre-switch warning: "This model has 128K limit, you're at 140K" |
+
+**Design principle:** Track context state in **absolute tokens** (model-independent),
+but compute zones and projections **relative to the current model's budget**.
+
 ### New Lifecycle Event: `context.update`
 
 Add to the unified hook model:
@@ -69,7 +96,7 @@ interface ContextState {
   sessionID: string
   turnNumber: number
 
-  // Token accounting
+  // Token accounting (from most recent LLM response)
   tokens: {
     input: number
     output: number
@@ -78,9 +105,10 @@ interface ContextState {
     total: number           // current context window size
   }
 
-  // Budget
+  // Current model budget (recalculated each turn)
   budget: {
-    model: string
+    model: string           // e.g., "claude-sonnet-4-20260514"
+    providerID: string
     contextLimit: number     // model's max context
     inputLimit: number       // model's max input (may differ)
     outputReserved: number   // reserved for output generation
@@ -90,17 +118,35 @@ interface ContextState {
     percentage: number       // used / usable * 100
   }
 
-  // Trend (computed over last N turns)
-  trend: {
-    tokensPerTurn: number    // average token growth per turn
-    turnsRemaining: number   // estimated turns until overflow
-    growthRate: "stable" | "growing" | "accelerating"
+  // Model switch detection
+  modelSwitch: {
+    switched: boolean        // true if model changed from previous turn
+    previousModel?: string   // what it was before
+    previousLimit?: number   // what the limit was before
+    budgetDelta?: number     // positive = more room, negative = tighter
   }
 
-  // Zone classification
+  // Trend (computed over last N turns, model-independent)
+  trend: {
+    tokensPerTurn: number    // avg token growth per turn (absolute)
+    turnsRemaining: number   // estimated turns to overflow on CURRENT model
+    growthRate: "stable" | "growing" | "accelerating"
+    // Per-model projections (if user has used multiple models)
+    projections?: {
+      model: string
+      limit: number
+      turnsRemaining: number
+      percentage: number
+    }[]
+  }
+
+  // Zone classification (relative to CURRENT model)
   zone: "green" | "yellow" | "orange" | "red" | "critical"
 
-  // Composition breakdown
+  // Cross-model zone (what zone would we be in on the smallest recent model?)
+  worstCaseZone: "green" | "yellow" | "orange" | "red" | "critical"
+
+  // Composition breakdown (in current model's token estimate)
   composition: {
     systemPrompt: number     // tokens in system prompt
     history: number          // tokens in conversation history
@@ -120,6 +166,110 @@ const ZONES = {
   red:      { min: 85, max: 95, action: "compact",  advisory: "urge_compact" },
   critical: { min: 95, max: 100, action: "compact", advisory: "force_compact" },
 }
+```
+
+### Multi-Model Zone Behavior
+
+Zones are always computed against the **current model's budget**, but we track
+a `worstCaseZone` across all recently-used models to prevent surprises:
+
+```typescript
+function computeZone(state: ContextState): { zone: Zone; worstCaseZone: Zone } {
+  // Current model zone
+  const zone = classifyZone(state.budget.percentage)
+
+  // Worst-case: what if user switches to the smallest model they've used recently?
+  const recentModels = getRecentModels(state.sessionID, 5)
+  const smallestLimit = Math.min(...recentModels.map(m => m.limit.context))
+  const worstPct = (state.tokens.total / smallestLimit) * 100
+  const worstCaseZone = classifyZone(worstPct)
+
+  return { zone, worstCaseZone }
+}
+```
+
+**Why `worstCaseZone` matters:** If a user is on Gemini 1M (green, 14%) but has
+also used GPT-4o (128K) in this session, `worstCaseZone` would be `critical` (109%).
+The system can warn: "You're green on Gemini, but switching back to GPT-4o would
+overflow. Consider compacting before switching models."
+
+### Model Switch Pre-Validation
+
+A new transform hook intercepts model switches BEFORE they take effect:
+
+```typescript
+// NEW transform hook
+"model.switch.before"?: TransformHandler<{
+  sessionID: string
+  currentModel: { id: string; limit: number }
+  targetModel: { id: string; limit: number }
+  currentTokens: number
+}, {
+  allow: boolean
+  warning?: string   // shown to user before switching
+}>
+```
+
+Example behavior:
+```
+User presses Ctrl+M to cycle to GPT-4o (128K)
+  → model.switch.before fires
+  → currentTokens: 140K, targetModel.limit: 128K
+  → 140K > 128K → return { allow: true, warning:
+      "Context (140K) exceeds GPT-4o limit (128K). Auto-compact will trigger." }
+  → User sees warning, can cancel or proceed
+```
+
+### Agent-Aware Model Context Display
+
+The system prompt section adapts to model switches:
+
+```typescript
+function contextBudgetSection(state: ContextState): string {
+  const lines = []
+
+  // Model switch notification
+  if (state.modelSwitch.switched) {
+    const delta = state.modelSwitch.budgetDelta!
+    if (delta < 0) {
+      lines.push(`⚠ Model switched to ${state.budget.model} (${fmt(state.budget.contextLimit)} context).`)
+      lines.push(`Budget reduced by ${fmt(Math.abs(delta))} tokens.`)
+      lines.push(`Zone changed: now at ${state.budget.percentage}%.`)
+    } else {
+      lines.push(`Model switched to ${state.budget.model} (${fmt(state.budget.contextLimit)} context).`)
+      lines.push(`Additional ${fmt(delta)} tokens available.`)
+    }
+  }
+
+  // Zone-based content (existing logic)
+  if (state.zone === "green" && !state.modelSwitch.switched) return ""
+  // ... rest of zone handling ...
+
+  // Multi-model projection (if multiple models used in session)
+  if (state.trend.projections && state.trend.projections.length > 1) {
+    lines.push(`\nContext by model:`)
+    for (const proj of state.trend.projections) {
+      lines.push(`  ${proj.model}: ${proj.percentage}% (~${proj.turnsRemaining} turns left)`)
+    }
+  }
+
+  return lines.join("\n")
+}
+```
+
+This means the agent sees:
+```
+⚠ Model switched to gpt-4o (128K context).
+Budget reduced by 72K tokens.
+Zone changed: now at 87% (Red).
+
+Context by model:
+  claude-sonnet-4: 43% (~22 turns left)
+  gpt-4o: 87% (~2 turns left)
+  gemini-2.5-pro: 11% (~120 turns left)
+
+Warning: Consider /compact. On current model, ~2 turns remain.
+```
 ```
 
 ### Where It Fires
@@ -295,6 +445,64 @@ A plugin implementing `context.update` could return different strategies:
   return { action: "none" }
 }
 ```
+
+## Tokenizer Differences Across Models
+
+Different models use different tokenizers. The same conversation text produces
+different token counts:
+
+| Model Family | Tokenizer | ~Tokens per 1K chars |
+|-------------|-----------|---------------------|
+| Claude (Anthropic) | Custom BPE | ~250-280 |
+| GPT-4o (OpenAI) | o200k_base | ~230-260 |
+| Gemini (Google) | SentencePiece | ~240-270 |
+| DeepSeek | Custom | ~260-290 |
+
+**Implication**: Token counts from one model's response don't directly translate
+to another model's context usage. A conversation that used 140K tokens on Claude
+might use 120K tokens on GPT-4o (different tokenizer efficiency).
+
+### Pragmatic Approach: Use Provider-Reported Tokens
+
+Rather than re-tokenizing (expensive, requires model-specific tokenizer libraries),
+we use the token counts reported by the CURRENT model's API response:
+
+```typescript
+// The tokens field comes directly from the LLM API response
+// Each provider reports tokens in ITS OWN tokenizer
+tokens: {
+  input: number,    // provider-reported input tokens
+  output: number,   // provider-reported output tokens
+  ...
+}
+```
+
+When the model switches, the next response's `tokens.input` reflects the full
+context as tokenized by the NEW model. This is the most accurate count available
+without running a local tokenizer.
+
+**The gap**: Between model switch and first response, we don't have the new model's
+token count. For the pre-switch warning, we use a heuristic estimate:
+
+```typescript
+function estimateTokensOnModel(currentTokens: number,
+                                currentModel: string,
+                                targetModel: string): number {
+  // Rough cross-model token ratio (empirically derived)
+  const RATIOS: Record<string, number> = {
+    "anthropic->openai": 0.92,    // Claude tokens → GPT tokens (GPT tokenizer more efficient)
+    "openai->anthropic": 1.09,
+    "anthropic->google": 0.95,
+    "google->anthropic": 1.05,
+    // ... etc
+  }
+  const key = `${getFamily(currentModel)}->${getFamily(targetModel)}`
+  return Math.round(currentTokens * (RATIOS[key] ?? 1.0))
+}
+```
+
+This is intentionally conservative (overestimates rather than underestimates).
+The real count arrives on the first response from the new model.
 
 ## Integration with Dolt Storage
 
