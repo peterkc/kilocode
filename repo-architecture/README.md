@@ -37,6 +37,24 @@ The old code (`src/`) was replaced entirely by `packages/opencode/` + `packages/
 The marketplace extension (`kilocode.Kilo-Code`) now publishes v7.x (7.0.33 as of Feb 27).
 Users on v5.9.0 will get auto-updated to v7.x.
 
+### JetBrains Plugin (Still on v5.9.0)
+
+The JetBrains Marketplace plugin (`ai.kilocode.jetbrains`, ID 28350) is still on v5.9.0.
+It ships a Kotlin wrapper (`Kilo Code-5.9.0.jar`) that hosts the **old bundled VSCode
+extension code** (`kilocode/dist/extension.js`, 27MB). This bundle contains:
+- The old `ReadFileTool` class
+- The old `read-lines.ts` with `outOfRangeError` (zero-based, no line count)
+- The old native tool schema with complex `files[].line_ranges` tuples
+
+**v7.x does NOT ship a JetBrains artifact.** All pre-v7.x bugs remain live for
+GoLand, IntelliJ, PyCharm, WebStorm, Rider, CLion, and other JetBrains IDE users.
+
+Verified by downloading and inspecting `Kilo_Code-5.9.0.zip` from JetBrains Marketplace:
+```
+unzip -p Kilo_Code-5.9.0.zip "Kilo Code/kilocode/dist/extension.js" | grep "Line with index"
+# → Line with index ${e} does not exist in '${t}'. Note that line indexing is zero-based
+```
+
 ## Package Structure Evolution
 
 ### v5.9.0 (Old Architecture)
