@@ -4,6 +4,7 @@ import { Session } from "."
 
 import { MessageV2 } from "./message-v2"
 import { Identifier } from "@/id/id"
+import { SessionID, MessageID } from "./schema"
 import { Snapshot } from "@/snapshot"
 
 import { Storage } from "@/storage/storage"
@@ -68,8 +69,8 @@ export namespace SessionSummary {
 
   export const summarize = fn(
     z.object({
-      sessionID: z.string(),
-      messageID: z.string(),
+      sessionID: SessionID.zod,
+      messageID: MessageID.zod,
     }),
     async (input) => {
       const all = await Session.messages({ sessionID: input.sessionID })
@@ -80,7 +81,7 @@ export namespace SessionSummary {
     },
   )
 
-  async function summarizeSession(input: { sessionID: string; messages: MessageV2.WithParts[] }) {
+  async function summarizeSession(input: { sessionID: SessionID; messages: MessageV2.WithParts[] }) {
     const diffs = await computeDiff({ messages: input.messages })
     await Session.setSummary({
       sessionID: input.sessionID,
@@ -101,7 +102,10 @@ export namespace SessionSummary {
     const messages = input.messages.filter(
       (m) => m.info.id === input.messageID || (m.info.role === "assistant" && m.info.parentID === input.messageID),
     )
-    const msgWithParts = messages.find((m) => m.info.id === input.messageID)!
+    // kilocode_change start - session may have been deleted before summarization completed
+    const msgWithParts = messages.find((m) => m.info.id === input.messageID)
+    if (!msgWithParts) return
+    // kilocode_change end
     const userMsg = msgWithParts.info as MessageV2.User
     const diffs = await computeDiff({ messages })
     userMsg.summary = {
@@ -113,21 +117,28 @@ export namespace SessionSummary {
 
   export const diff = fn(
     z.object({
-      sessionID: Identifier.schema("session"),
-      messageID: Identifier.schema("message").optional(),
+      sessionID: SessionID.zod,
+      messageID: MessageID.zod.optional(),
     }),
     async (input) => {
       const diffs = await Storage.read<Snapshot.FileDiff[]>(["session_diff", input.sessionID]).catch(() => [])
+      // kilocode_change start — scrub oversized diffs from stored session_diff
       const next = diffs.map((item) => {
         const file = unquoteGitPath(item.file)
-        if (file === item.file) return item
+        const oversized =
+          Buffer.byteLength(item.before) > Snapshot.MAX_DIFF_SIZE ||
+          Buffer.byteLength(item.after) > Snapshot.MAX_DIFF_SIZE
+        if (file === item.file && !oversized) return item
         return {
           ...item,
           file,
+          before: oversized ? "" : item.before,
+          after: oversized ? "" : item.after,
         }
       })
-      const changed = next.some((item, i) => item.file !== diffs[i]?.file)
+      const changed = next.some((item, i) => item !== diffs[i])
       if (changed) Storage.write(["session_diff", input.sessionID], next).catch(() => {})
+      // kilocode_change end
       return next
     },
   )

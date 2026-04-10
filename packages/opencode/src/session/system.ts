@@ -1,5 +1,6 @@
 import { Ripgrep } from "../file/ripgrep"
 
+import { Global } from "../global" // kilocode_change
 import { Instance } from "../project/instance"
 
 import PROMPT_ANTHROPIC from "./prompt/anthropic.txt"
@@ -10,10 +11,13 @@ import PROMPT_GEMINI from "./prompt/gemini.txt"
 import PROMPT_CODEX from "./prompt/codex_header.txt"
 import PROMPT_TRINITY from "./prompt/trinity.txt"
 import type { Provider } from "@/provider/provider"
+import type { Agent } from "@/agent/agent"
+import { PermissionNext } from "@/permission/next"
+import { Skill } from "@/skill"
 
 // kilocode_change start
 import SOUL from "../kilocode/soul.txt"
-import { editorContextEnvLines, type EditorContext } from "../kilocode/editor-context"
+import { staticEnvLines, type EditorContext } from "../kilocode/editor-context"
 // kilocode_change end
 
 export namespace SystemPrompt {
@@ -28,12 +32,30 @@ export namespace SystemPrompt {
   // kilocode_change end
 
   export function provider(model: Provider.Model) {
+    // kilocode_change start
+    switch (model.prompt) {
+      case "anthropic":
+        return [PROMPT_ANTHROPIC]
+      case "anthropic_without_todo":
+        return [PROMPT_ANTHROPIC_WITHOUT_TODO]
+      case "beast":
+        return [PROMPT_BEAST]
+      case "codex":
+        return [PROMPT_CODEX]
+      case "gemini":
+        return [PROMPT_GEMINI]
+      case "trinity":
+        return [PROMPT_TRINITY]
+    }
+    // kilocode_change end
+
     if (model.api.id.includes("gpt-5")) return [PROMPT_CODEX]
     if (model.api.id.includes("gpt-") || model.api.id.includes("o1") || model.api.id.includes("o3"))
       return [PROMPT_BEAST]
     if (model.api.id.includes("gemini-")) return [PROMPT_GEMINI]
     if (model.api.id.includes("claude")) return [PROMPT_ANTHROPIC]
     if (model.api.id.toLowerCase().includes("trinity")) return [PROMPT_TRINITY]
+
     return [PROMPT_ANTHROPIC_WITHOUT_TODO]
   }
 
@@ -47,9 +69,12 @@ export namespace SystemPrompt {
         `Here is some useful information about the environment you are running in:`,
         `<env>`,
         `  Working directory: ${Instance.directory}`,
+        `  Workspace root folder: ${Instance.worktree}`,
         `  Is directory a git repo: ${project.vcs === "git" ? "yes" : "no"}`,
         `  Platform: ${process.platform}`,
-        ...editorContextEnvLines(editorContext), // kilocode_change
+        `  Project config: .kilo/command/*.md, .kilo/agent/*.md, kilo.json, AGENTS.md. Put new commands and agents in .kilo/. Do not use .kilocode/ or .opencode/.`, // kilocode_change
+        `  Global config: ${Global.Path.config}/ (same structure)`, // kilocode_change
+        ...staticEnvLines(editorContext), // kilocode_change
         `</env>`,
         `<directories>`,
         `  ${
@@ -63,5 +88,19 @@ export namespace SystemPrompt {
         `</directories>`,
       ].join("\n"),
     ]
+  }
+
+  export async function skills(agent: Agent.Info) {
+    if (PermissionNext.disabled(["skill"], agent.permission).has("skill")) return
+
+    const list = await Skill.available(agent)
+
+    return [
+      "Skills provide specialized instructions and workflows for specific tasks.",
+      "Use the skill tool to load a skill when a task matches its description.",
+      // the agents seem to ingest the information about skills a bit better if we present a more verbose
+      // version of them here and a less verbose version in tool description, rather than vice versa.
+      Skill.fmt(list, { verbose: true }),
+    ].join("\n")
   }
 }

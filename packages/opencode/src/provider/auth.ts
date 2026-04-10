@@ -7,6 +7,8 @@ import type { AuthOuathResult, Hooks } from "@kilocode/plugin"
 import { NamedError } from "@opencode-ai/util/error"
 import { Auth } from "@/auth"
 import { Telemetry } from "@kilocode/kilo-telemetry" // kilocode_change
+import { ModelCache } from "./model-cache" // kilocode_change
+import { ProviderID } from "./schema"
 
 export namespace ProviderAuth {
   const state = Instance.state(async () => {
@@ -54,7 +56,7 @@ export namespace ProviderAuth {
 
   export const authorize = fn(
     z.object({
-      providerID: z.string(),
+      providerID: ProviderID.zod,
       method: z.number(),
     }),
     async (input): Promise<Authorization | undefined> => {
@@ -74,7 +76,7 @@ export namespace ProviderAuth {
 
   export const callback = fn(
     z.object({
-      providerID: z.string(),
+      providerID: ProviderID.zod,
       method: z.number(),
       code: z.string().optional(),
     }),
@@ -121,6 +123,10 @@ export namespace ProviderAuth {
         Telemetry.trackAuthSuccess(input.providerID)
         // kilocode_change end
 
+        // kilocode_change start - invalidate provider/model cache after auth change
+        ModelCache.clear(input.providerID)
+        // kilocode_change end
+
         return
       }
 
@@ -130,7 +136,7 @@ export namespace ProviderAuth {
 
   export const api = fn(
     z.object({
-      providerID: z.string(),
+      providerID: ProviderID.zod,
       key: z.string(),
     }),
     async (input) => {
@@ -138,19 +144,22 @@ export namespace ProviderAuth {
         type: "api",
         key: input.key,
       })
+      // kilocode_change start - invalidate provider/model cache after auth change
+      ModelCache.clear(input.providerID)
+      // kilocode_change end
     },
   )
 
   export const OauthMissing = NamedError.create(
     "ProviderAuthOauthMissing",
     z.object({
-      providerID: z.string(),
+      providerID: ProviderID.zod,
     }),
   )
   export const OauthCodeMissing = NamedError.create(
     "ProviderAuthOauthCodeMissing",
     z.object({
-      providerID: z.string(),
+      providerID: ProviderID.zod,
     }),
   )
 

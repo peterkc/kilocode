@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import type { NamedError } from "@opencode-ai/util/error"
 import { APICallError } from "ai"
+import { setTimeout as sleep } from "node:timers/promises"
 import { SessionRetry } from "../../src/session/retry"
 import { MessageV2 } from "../../src/session/message-v2"
+import { ProviderID } from "../../src/provider/schema"
+
+const providerID = ProviderID.make("test")
 
 function apiError(headers?: Record<string, string>): MessageV2.APIError {
   return new MessageV2.APIError({
@@ -121,6 +125,16 @@ describe("session.retry.retryable", () => {
 
     expect(SessionRetry.retryable(error)).toBeUndefined()
   })
+
+  test("does not retry FreeUsageLimitError", () => {
+    const error = new MessageV2.APIError({
+      message: "rate limit exceeded",
+      isRetryable: true,
+      responseBody: '{"error":{"code":"FreeUsageLimitError"}}',
+    }).toObject() as ReturnType<NamedError["toObject"]>
+
+    expect(SessionRetry.retryable(error)).toBeUndefined()
+  })
 })
 
 describe("session.message-v2.fromError", () => {
@@ -135,7 +149,7 @@ describe("session.message-v2.fromError", () => {
             new ReadableStream({
               async pull(controller) {
                 controller.enqueue("Hello,")
-                await Bun.sleep(10000)
+                await sleep(10000)
                 controller.enqueue(" World!")
                 controller.close()
               },
@@ -149,7 +163,7 @@ describe("session.message-v2.fromError", () => {
         .then((res) => res.text())
         .catch((e) => e)
 
-      const result = MessageV2.fromError(error, { providerID: "test" })
+      const result = MessageV2.fromError(error, { providerID })
 
       expect(MessageV2.APIError.isInstance(result)).toBe(true)
       expect((result as MessageV2.APIError).data.isRetryable).toBe(true)
@@ -172,6 +186,23 @@ describe("session.message-v2.fromError", () => {
     expect(retryable).toBe("Connection reset by server")
   })
 
+  // kilocode_change start
+  test("ECONNREFUSED socket error is retryable", () => {
+    const result = MessageV2.fromError(
+      {
+        code: "ECONNREFUSED",
+        syscall: "connect",
+        message: "connect ECONNREFUSED 127.0.0.1:3000",
+      },
+      { providerID: ProviderID.make("test") },
+    ) as MessageV2.APIError
+
+    expect(result.data.isRetryable).toBe(true)
+    expect(result.data.message).toBe("Connection refused")
+    expect(result.data.metadata?.code).toBe("ECONNREFUSED")
+  })
+  // kilocode_change end
+
   test("marks OpenAI 404 status codes as retryable", () => {
     const error = new APICallError({
       message: "boom",
@@ -182,7 +213,7 @@ describe("session.message-v2.fromError", () => {
       responseBody: '{"error":"boom"}',
       isRetryable: false,
     })
-    const result = MessageV2.fromError(error, { providerID: "openai" }) as MessageV2.APIError
+    const result = MessageV2.fromError(error, { providerID: ProviderID.make("openai") }) as MessageV2.APIError
     expect(result.data.isRetryable).toBe(true)
   })
 })

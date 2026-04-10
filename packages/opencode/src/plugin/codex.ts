@@ -4,6 +4,8 @@ import { Installation } from "../installation"
 import { Auth, OAUTH_DUMMY_KEY } from "../auth"
 import os from "os"
 import { ProviderTransform } from "@/provider/transform"
+import { ModelID, ProviderID } from "@/provider/schema"
+import { setTimeout as sleep } from "node:timers/promises"
 
 const log = Log.create({ service: "plugin.codex" })
 
@@ -145,7 +147,9 @@ async function refreshAccessToken(refreshToken: string): Promise<TokenResponse> 
 const HTML_SUCCESS = `<!doctype html>
 <html>
   <head>
-    <title>OpenCode - Codex Authorization Successful</title>
+    <!-- kilocode_change start -->
+    <title>Kilo - Codex Authorization Successful</title>
+    <!-- kilocode_change end -->
     <style>
       body {
         font-family:
@@ -176,7 +180,9 @@ const HTML_SUCCESS = `<!doctype html>
   <body>
     <div class="container">
       <h1>Authorization Successful</h1>
-      <p>You can close this window and return to OpenCode.</p>
+      <!-- kilocode_change start -->
+      <p>You can close this window and return to Kilo.</p>
+      <!-- kilocode_change end -->
     </div>
     <script>
       setTimeout(() => window.close(), 2000)
@@ -187,7 +193,9 @@ const HTML_SUCCESS = `<!doctype html>
 const HTML_ERROR = (error: string) => `<!doctype html>
 <html>
   <head>
-    <title>OpenCode - Codex Authorization Failed</title>
+    <!-- kilocode_change start -->
+    <title>Kilo - Codex Authorization Failed</title>
+    <!-- kilocode_change end -->
     <style>
       body {
         font-family:
@@ -361,6 +369,7 @@ export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
           "gpt-5.1-codex-max",
           "gpt-5.1-codex-mini",
           "gpt-5.2",
+          "gpt-5.4",
           "gpt-5.2-codex",
           "gpt-5.3-codex",
           "gpt-5.1-codex",
@@ -373,8 +382,8 @@ export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
 
         if (!provider.models["gpt-5.3-codex"]) {
           const model = {
-            id: "gpt-5.3-codex",
-            providerID: "openai",
+            id: ModelID.make("gpt-5.3-codex"),
+            providerID: ProviderID.openai,
             api: {
               id: "gpt-5.3-codex",
               url: "https://chatgpt.com/backend-api/codex",
@@ -602,7 +611,7 @@ export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
                     return { type: "failed" as const }
                   }
 
-                  await Bun.sleep(interval + OAUTH_POLLING_SAFETY_MARGIN_MS)
+                  await sleep(interval + OAUTH_POLLING_SAFETY_MARGIN_MS)
                 }
               },
             }

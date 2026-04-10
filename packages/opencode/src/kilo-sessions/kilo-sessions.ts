@@ -1,6 +1,9 @@
 import { Bus } from "@/bus"
+import { BusEvent } from "@/bus/bus-event"
 import { Provider } from "@/provider/provider"
 import { Session } from "@/session"
+import { SessionID } from "@/session/schema"
+import { ModelID, ProviderID } from "@/provider/schema"
 import { MessageV2 } from "@/session/message-v2"
 import { Storage } from "@/storage/storage"
 import { Log } from "@/util/log"
@@ -10,11 +13,26 @@ import { clearInFlightCache, withInFlightCache } from "@/kilo-sessions/inflight-
 import type * as SDK from "@kilocode/sdk/v2"
 import z from "zod"
 import { KILO_API_BASE } from "@kilocode/kilo-gateway"
+import { Config } from "@/config/config"
 import { Instance } from "@/project/instance"
 import { Vcs } from "@/project/vcs"
 import simpleGit from "simple-git"
+import { RemoteWS } from "@/kilo-sessions/remote-ws"
+import { RemoteSender } from "@/kilo-sessions/remote-sender"
+import { SessionStatus } from "@/session/status"
+import { Telemetry } from "@kilocode/kilo-telemetry"
 
 export namespace KiloSessions {
+  export const Event = {
+    RemoteStatusChanged: BusEvent.define(
+      "kilo-sessions.remote-status-changed",
+      z.object({
+        enabled: z.boolean(),
+        connected: z.boolean(),
+      }),
+    ),
+  }
+
   const log = Log.create({ service: "kilo-sessions" })
 
   const Uuid = z.uuid()
@@ -107,10 +125,19 @@ export namespace KiloSessions {
     })
   }
 
+  const shareDisabled = process.env["KILO_DISABLE_SHARE"] === "true" || process.env["KILO_DISABLE_SHARE"] === "1"
+  const ingestDisabled =
+    process.env["KILO_DISABLE_SESSION_INGEST"] === "true" || process.env["KILO_DISABLE_SESSION_INGEST"] === "1"
+  const debugIngest =
+    process.env["KILO_DEBUG_SESSION_INGEST"] === "true" || process.env["KILO_DEBUG_SESSION_INGEST"] === "1"
+
   const ingest = IngestQueue.create({
     getShare: async (sessionId) => get(sessionId).catch(() => undefined),
     getClient,
-    log,
+    log: {
+      ...(debugIngest ? { info: log.info.bind(log) } : {}),
+      error: log.error.bind(log),
+    },
     onAuthError: () => {
       // Non-retryable until credentials are fixed.
       // Clearing caches prevents repeated use of a now-invalid token/client.
@@ -118,9 +145,12 @@ export namespace KiloSessions {
     },
   })
 
-  const shareDisabled = process.env["KILO_DISABLE_SHARE"] === "true" || process.env["KILO_DISABLE_SHARE"] === "1"
-  const ingestDisabled =
-    process.env["KILO_DISABLE_SESSION_INGEST"] === "true" || process.env["KILO_DISABLE_SESSION_INGEST"] === "1"
+  const remoteEnabled = process.env["KILO_REMOTE"] === "1"
+  let remote: { conn: RemoteWS.Connection; sender: RemoteSender.Sender; heartbeat: () => Promise<void> } | undefined
+  let enabling: Promise<void> | undefined
+  let remoteSeq = 0
+  const focused = new Set<string>()
+  const opened = new Set<string>()
 
   export async function init() {
     if (ingestDisabled) return
@@ -190,11 +220,168 @@ export namespace KiloSessions {
     Bus.subscribe(Session.Event.TurnClose, async (evt) => {
       await ingest.sync(evt.properties.sessionID, [{ type: "session_close", data: { reason: evt.properties.reason } }])
     })
+
+    const cfg = await Config.getGlobal()
+    if (remoteEnabled || cfg.remote_control)
+      enableRemote().catch((err) => log.warn("remote not enabled", { error: String(err) }))
+    // Use wildcard subscription so the dispose handler actually fires —
+    // Bus.state dispose only notifies "*" subscribers, not event-type ones.
+    Bus.subscribeAll((evt) => {
+      if (evt.type === Bus.InstanceDisposed.type) disableRemote()
+    })
+  }
+
+  export async function enableRemote() {
+    if (remote) return
+    if (ingestDisabled) return
+    if (enabling) return enabling
+    const seq = ++remoteSeq
+    enabling = (async () => {
+      const token = await kilocodeToken()
+      if (!token) {
+        throw new Error("Unable to enable remote: no Kilo credentials found. Run `kilo auth login`.")
+      }
+
+      const valid = await authValid(token)
+      if (valid === false) {
+        throw new Error("Unable to enable remote: invalid or expired Kilo credentials. Run `kilo auth login`.")
+      }
+      if (valid === undefined) throw new Error("Unable to enable remote: failed to verify Kilo credentials.")
+
+      const url = (process.env["KILO_SESSION_INGEST_URL"] ?? "https://ingest.kilosessions.ai")
+        .replace(/^https:\/\//, "wss://")
+        .replace(/^http:\/\//, "ws://")
+
+      // Capture directory so the heartbeat timer can re-enter the Instance context
+      // (setInterval runs outside AsyncLocalStorage scope)
+      const directory = Instance.directory
+      const getSessions = async () => {
+        const [gitUrl, gitBranch] = await Promise.all([
+          getGitUrl().catch(() => undefined),
+          Vcs.branch().catch(() => undefined),
+        ])
+        const statuses = SessionStatus.list()
+        const ids = new Set(Object.keys(statuses))
+        for (const id of focused) ids.add(id)
+        for (const id of opened) ids.add(id)
+        const results = await Promise.all(
+          [...ids].map(async (id) => {
+            const session = await Session.get(SessionID.make(id)).catch(() => undefined)
+            if (!session) return undefined
+            return {
+              id,
+              status: statuses[id]?.type ?? "idle",
+              title: session.title,
+              parentSessionId: session.parentID,
+              gitUrl,
+              gitBranch,
+            }
+          }),
+        )
+        const sessions = results.filter((r): r is NonNullable<typeof r> => !!r)
+        return {
+          sessions,
+          focused: focused.size > 0 ? [...focused] : undefined,
+          open: opened.size > 0 ? [...opened] : undefined,
+        }
+      }
+
+      const conn = RemoteWS.connect({
+        url,
+        getToken: kilocodeToken,
+        withContext: (fn) => Instance.provide({ directory, fn }),
+        getSessions,
+        log,
+        onOpen: () => {
+          void Bus.publish(Event.RemoteStatusChanged, { enabled: true, connected: true })
+        },
+        onDisconnect: () => {
+          void Bus.publish(Event.RemoteStatusChanged, { enabled: !!remote, connected: false })
+        },
+        onMessage: (msg) => {
+          // Must run inside Instance.provide so Bus.subscribeAll can access
+          // the instance-scoped subscription map via Instance.state().
+          void Instance.provide({ directory, fn: () => sender.handle(msg) })
+        },
+        onClose: () => disableRemote(),
+      })
+
+      const sender = RemoteSender.create({
+        conn,
+        directory: Instance.directory,
+        log,
+      })
+
+      const heartbeat = async () => {
+        conn.send({ type: "heartbeat", ...(await getSessions()) })
+      }
+
+      if (seq !== remoteSeq) {
+        sender.dispose()
+        conn.close()
+        return
+      }
+
+      remote = { conn, sender, heartbeat }
+      log.info("remote connection enabled", { connected: conn.connected })
+      Telemetry.trackRemoteConnectionOpened()
+      void Bus.publish(Event.RemoteStatusChanged, { enabled: true, connected: conn.connected })
+    })().finally(() => {
+      if (remoteSeq === seq) enabling = undefined
+    })
+
+    return enabling
+  }
+
+  export function disableRemote() {
+    remoteSeq += 1
+    enabling = undefined
+    if (!remote) return
+    remote.sender.dispose()
+    remote.conn.close()
+    remote = undefined
+    log.info("remote connection disabled")
+    void Bus.publish(Event.RemoteStatusChanged, { enabled: false, connected: false })
+  }
+
+  export function remoteStatus() {
+    return {
+      enabled: !!remote,
+      connected: remote?.conn.connected ?? false,
+    }
+  }
+  export function setViewedSessions(input: { focused: string[]; open?: string[] }) {
+    focused.clear()
+    opened.clear()
+    for (const id of input.focused) {
+      focused.add(id)
+    }
+    for (const id of input.open ?? []) {
+      opened.add(id)
+    }
+    if (remote) void remote.heartbeat().catch((err) => log.warn("heartbeat failed", { error: String(err) }))
   }
 
   export async function create(sessionId: string) {
+    const result = await bootstrap(sessionId)
+    if (!result) return { id: "", ingestPath: "" }
+
+    void fullSync(sessionId).catch((error) => log.error("share full sync failed", { sessionId, error }))
+
+    return result
+  }
+
+  export async function bootstrap(sessionId: string) {
+    if (ingestDisabled) {
+      log.info("session bootstrap skipped: ingest disabled", { sessionId })
+      return
+    }
+
     const client = await getClient()
-    if (!client) return { id: "", ingestPath: "" }
+    if (!client) {
+      log.info("session bootstrap skipped: no client", { sessionId })
+      return
+    }
 
     log.info("creating session", { sessionId })
 
@@ -211,7 +398,7 @@ export namespace KiloSessions {
 
     await Storage.write(["session_share", sessionId], result)
 
-    void fullSync(sessionId).catch((error) => log.error("share full sync failed", { sessionId, error }))
+    log.info("session bootstrap completed", { sessionId })
 
     return result
   }
@@ -340,15 +527,15 @@ export namespace KiloSessions {
   async function fullSync(sessionId: string) {
     log.info("full sync", { sessionId })
 
-    const session = await Session.get(sessionId)
-    const diffs = await Session.diff(sessionId)
-    const messages = await Array.fromAsync(MessageV2.stream(sessionId))
+    const session = await Session.get(SessionID.make(sessionId))
+    const diffs = await Session.diff(SessionID.make(sessionId))
+    const messages = await Array.fromAsync(MessageV2.stream(SessionID.make(sessionId)))
     messages.reverse()
     const models = await Promise.all(
       messages
         .filter((m) => m.info.role === "user")
         .map((m) => (m.info as SDK.UserMessage).model)
-        .map((m) => Provider.getModel(m.providerID, m.modelID).then((m) => m)),
+        .map((m) => Provider.getModel(ProviderID.make(m.providerID), ModelID.make(m.modelID)).then((m) => m)),
     )
 
     await ingest.sync(sessionId, [

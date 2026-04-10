@@ -2,6 +2,7 @@ import { Hono } from "hono"
 import { describeRoute, validator, resolver } from "hono-openapi"
 import z from "zod"
 import { PermissionNext } from "@/permission/next"
+import { PermissionID } from "@/permission/schema"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
 
@@ -28,10 +29,16 @@ export const PermissionRoutes = lazy(() =>
       validator(
         "param",
         z.object({
-          requestID: z.string(),
+          requestID: PermissionID.zod,
         }),
       ),
-      validator("json", z.object({ reply: PermissionNext.Reply, message: z.string().optional() })),
+      validator(
+        "json",
+        z.object({
+          reply: PermissionNext.Reply,
+          message: z.string().optional(),
+        }),
+      ),
       async (c) => {
         const params = c.req.valid("param")
         const json = c.req.valid("json")
@@ -43,6 +50,50 @@ export const PermissionRoutes = lazy(() =>
         return c.json(true)
       },
     )
+    // kilocode_change start
+    .post(
+      "/:requestID/always-rules",
+      describeRoute({
+        summary: "Save always-allow/deny permission rules",
+        description: "Save approved/denied always-rules for a pending permission request.",
+        operationId: "permission.saveAlwaysRules",
+        responses: {
+          200: {
+            description: "Always rules saved successfully",
+            content: {
+              "application/json": {
+                schema: resolver(z.boolean()),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          requestID: PermissionID.zod,
+        }),
+      ),
+      validator(
+        "json",
+        z.object({
+          approvedAlways: z.string().array().optional(),
+          deniedAlways: z.string().array().optional(),
+        }),
+      ),
+      async (c) => {
+        const params = c.req.valid("param")
+        const json = c.req.valid("json")
+        await PermissionNext.saveAlwaysRules({
+          requestID: params.requestID,
+          approvedAlways: json.approvedAlways,
+          deniedAlways: json.deniedAlways,
+        })
+        return c.json(true)
+      },
+    )
+    // kilocode_change end
     .get(
       "/",
       describeRoute({

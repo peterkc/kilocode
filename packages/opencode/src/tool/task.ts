@@ -2,6 +2,7 @@ import { Tool } from "./tool"
 import DESCRIPTION from "./task.txt"
 import z from "zod"
 import { Session } from "../session"
+import { SessionID, MessageID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Identifier } from "../id/id"
 import { Agent } from "../agent/agent"
@@ -60,12 +61,34 @@ export const TaskTool = Tool.define("task", async (ctx) => {
 
       const agent = await Agent.get(params.subagent_type)
       if (!agent) throw new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`)
+      // kilocode_change start — reject primary agents; only subagent/all modes allowed
+      if (agent.mode === "primary")
+        throw new Error(`Agent "${params.subagent_type}" is a primary agent and cannot be used as a subagent`)
+      // kilocode_change end
 
-      const hasTaskPermission = agent.permission.some((rule) => rule.permission === "task")
+      // kilocode_change start — inherit edit and bash restrictions from the calling agent so
+      // sub-agents cannot perform actions the parent agent is not allowed to perform.
+      // We merge the static agent definition with the current session's accumulated permissions
+      // so that restrictions survive multi-hop chains (plan → general → explore).
+      // Agent.get() gives the base definition; session.permission carries restrictions that
+      // were themselves inherited from a grandparent, so both sources are needed.
+      const caller = await Agent.get(ctx.agent)
+      const callerSession = await Session.get(ctx.sessionID)
+      const callerRules = PermissionNext.merge(caller?.permission ?? [], callerSession.permission ?? [])
+      // Build the set of MCP server prefixes (e.g. "servername_") so we can
+      // include both server-wide wildcards ("servername_*") and specific MCP tool
+      // permissions ("servername_create_issue") in the inherited ruleset.
+      // Same sanitisation logic as agent.ts.
+      const mcpPrefixes = Object.keys(config.mcp ?? {}).map((k) => k.replace(/[^a-zA-Z0-9_-]/g, "_") + "_")
+      const isMcpRule = (p: string) => mcpPrefixes.some((prefix) => p.startsWith(prefix))
+      const inherited = callerRules.filter(
+        (r) => r.permission === "edit" || r.permission === "bash" || isMcpRule(r.permission),
+      )
+      // kilocode_change end
 
       const session = await iife(async () => {
         if (params.task_id) {
-          const found = await Session.get(params.task_id).catch(() => {})
+          const found = await Session.get(SessionID.make(params.task_id)).catch(() => {})
           if (found) return found
         }
 
@@ -83,20 +106,15 @@ export const TaskTool = Tool.define("task", async (ctx) => {
               pattern: "*",
               action: "deny",
             },
-            ...(hasTaskPermission
-              ? []
-              : [
-                  {
-                    permission: "task" as const,
-                    pattern: "*" as const,
-                    action: "deny" as const,
-                  },
-                ]),
+            // kilocode_change start — unconditionally deny task for all subagent sessions
+            { permission: "task", pattern: "*", action: "deny" },
+            // kilocode_change end
             ...(config.experimental?.primary_tools?.map((t) => ({
               pattern: "*",
               action: "allow" as const,
               permission: t,
             })) ?? []),
+            ...inherited, // kilocode_change — propagate caller's edit and bash restrictions
           ],
         })
       })
@@ -116,7 +134,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
         },
       })
 
-      const messageID = Identifier.ascending("message")
+      const messageID = MessageID.ascending()
 
       function cancel() {
         SessionPrompt.cancel(session.id)
@@ -136,7 +154,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
         tools: {
           todowrite: false,
           todoread: false,
-          ...(hasTaskPermission ? {} : { task: false }),
+          task: false, // kilocode_change
           ...Object.fromEntries((config.experimental?.primary_tools ?? []).map((t) => [t, false])),
         },
         parts: promptParts,

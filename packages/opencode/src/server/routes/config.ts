@@ -3,6 +3,7 @@ import { describeRoute, validator, resolver } from "hono-openapi"
 import z from "zod"
 import { Config } from "../../config/config"
 import { Provider } from "../../provider/provider"
+import { ModelID } from "../../provider/schema"
 import { mapValues } from "remeda"
 import { errors } from "../error"
 import { Log } from "../../util/log"
@@ -62,6 +63,29 @@ export const ConfigRoutes = lazy(() =>
         return c.json(config)
       },
     )
+    // kilocode_change start
+    .get(
+      "/warnings",
+      describeRoute({
+        summary: "Get config warnings",
+        description: "Get warnings generated during config loading (e.g., invalid JSON, schema errors).",
+        operationId: "config.warnings",
+        responses: {
+          200: {
+            description: "Config warnings",
+            content: {
+              "application/json": {
+                schema: resolver(Config.Warning.array()),
+              },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        return c.json(await Config.warnings())
+      },
+    )
+    // kilocode_change end
     .get(
       "/providers",
       describeRoute({
@@ -89,16 +113,22 @@ export const ConfigRoutes = lazy(() =>
         const providers = await Provider.list()
 
         // kilocode_change start - Fetch default model from Kilo API
-        const kiloAuth = await Auth.get("kilo")
-        const token = kiloAuth?.type === "oauth" ? kiloAuth.access : kiloAuth?.key
-        const organizationId = kiloAuth?.type === "oauth" ? kiloAuth.accountId : undefined
-        const kiloApiDefault = await fetchDefaultModel(token, organizationId)
+        // Only call the Kilo API when the kilo provider is actually available.
+        // This prevents unnecessary network calls for teams using only their
+        // own providers (e.g. LiteLLM) via enabled_providers config.
+        let kiloApiDefault: string | undefined
+        if (providers["kilo"]) {
+          const kiloAuth = await Auth.get("kilo")
+          const token = kiloAuth?.type === "oauth" ? kiloAuth.access : kiloAuth?.key
+          const organizationId = kiloAuth?.type === "oauth" ? kiloAuth.accountId : undefined
+          kiloApiDefault = await fetchDefaultModel(token, organizationId)
+        }
         // kilocode_change end
 
         // kilocode_change start - Use API default for Kilo provider if valid
         const defaults = mapValues(providers, (item) => Provider.sort(Object.values(item.models))[0].id)
         if (kiloApiDefault && providers["kilo"]?.models[kiloApiDefault]) {
-          defaults["kilo"] = kiloApiDefault
+          defaults["kilo"] = ModelID.make(kiloApiDefault)
         }
         // kilocode_change end
 

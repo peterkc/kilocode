@@ -5,6 +5,7 @@ import { useDialog } from "@tui/ui/dialog"
 import { useSync } from "@tui/context/sync"
 import { For, Match, Switch, Show, createMemo } from "solid-js"
 import { Installation } from "../../../../installation"
+import { Global } from "@/global" // kilocode_change
 
 export type DialogStatusProps = {}
 
@@ -20,7 +21,7 @@ export function DialogStatus() {
     const result = list.map((value) => {
       if (value.startsWith("file://")) {
         const path = fileURLToPath(value)
-        const parts = path.split("/")
+        const parts = path.split(/[/\\]/) // kilocode_change: fix Windows backslash paths
         const filename = parts.pop() || path
         if (!filename.includes(".")) return { name: filename }
         const basename = filename.split(".")[0]
@@ -52,6 +53,21 @@ export function DialogStatus() {
       </box>
       {/* kilocode_change start */}
       <text fg={theme.textMuted}>Kilo v{Installation.VERSION}</text>
+      {/* kilocode_change end */}
+      {/* kilocode_change start */}
+      <box>
+        <text fg={theme.text}>Paths</text>
+        <text fg={theme.textMuted}>
+          Global config {"  "}
+          {Global.Path.config.replace(Global.Path.home, "~")}
+        </text>
+        <Show when={sync.data.path.directory}>
+          <text fg={theme.textMuted}>
+            Project {"       "}
+            {sync.data.path.directory.replace(Global.Path.home, "~")}
+          </text>
+        </Show>
+      </box>
       {/* kilocode_change end */}
       <Show when={Object.keys(sync.data.mcp).length > 0} fallback={<text fg={theme.text}>No MCP Servers</text>}>
         <box>

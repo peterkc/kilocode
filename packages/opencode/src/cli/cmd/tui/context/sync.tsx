@@ -9,6 +9,7 @@ import type {
   Command,
   PermissionRequest,
   QuestionRequest,
+  SessionNetworkWait, // kilocode_change
   LspStatus,
   McpStatus,
   McpResource,
@@ -28,6 +29,8 @@ import { useArgs } from "./args"
 import { batch, onMount } from "solid-js"
 import { Log } from "@/util/log"
 import type { Path } from "@kilocode/sdk"
+import type { Workspace } from "@kilocode/sdk/v2"
+import { useToast } from "../ui/toast" // kilocode_change
 
 export const { use: useSync, provider: SyncProvider } = createSimpleContext({
   name: "Sync",
@@ -46,13 +49,18 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       question: {
         [sessionID: string]: QuestionRequest[]
       }
+      // kilocode_change start
+      network: {
+        [sessionID: string]: SessionNetworkWait[]
+      }
+      // kilocode_change end
       config: Config
       session: Session[]
       session_status: {
         [sessionID: string]: SessionStatus
       }
       session_diff: {
-        [sessionID: string]: Snapshot.FileDiff[]
+        [sessionID: string]: Omit<Snapshot.FileDiff, "before" | "after">[] // kilocode_change
       }
       todo: {
         [sessionID: string]: Todo[]
@@ -73,6 +81,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       formatter: FormatterStatus[]
       vcs: VcsInfo | undefined
       path: Path
+      workspaceList: Workspace[]
     }>({
       provider_next: {
         all: [],
@@ -85,6 +94,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       agent: [],
       permission: {},
       question: {},
+      // kilocode_change start
+      network: {},
+      // kilocode_change end
       command: [],
       provider: [],
       provider_default: {},
@@ -100,9 +112,48 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       formatter: [],
       vcs: undefined,
       path: { state: "", config: "", worktree: "", directory: "" },
+      workspaceList: [],
     })
 
     const sdk = useSDK()
+    const toast = useToast() // kilocode_change
+
+    const fullSyncedSessions = new Set<string>() // kilocode_change
+
+    async function syncWorkspaces() {
+      const result = await sdk.client.experimental.workspace.list().catch(() => undefined)
+      if (!result?.data) return
+      setStore("workspaceList", reconcile(result.data))
+    }
+
+    // kilocode_change start
+    function evict(sessionID: string) {
+      // Collect child session IDs so we can evict them too.
+      const children = store.session.filter((s) => s.parentID === sessionID).map((s) => s.id)
+      setStore(
+        produce((draft) => {
+          const messages = draft.message[sessionID]
+          if (messages) {
+            for (const msg of messages) delete draft.part[msg.id]
+          }
+          delete draft.message[sessionID]
+          delete draft.session_diff[sessionID]
+          delete draft.session_status[sessionID]
+          delete draft.todo[sessionID]
+          delete draft.network[sessionID]
+        }),
+      )
+      fullSyncedSessions.delete(sessionID)
+      for (const child of children) evict(child)
+    }
+
+    // Strip summary.diffs from user messages — the TUI never reads them
+    // and they can carry multi-MB before/after file content strings.
+    function strip(msg: Message): Message {
+      if (msg.role !== "user" || !msg.summary?.diffs) return msg
+      return { ...msg, summary: { ...msg.summary, diffs: [] } } as Message
+    }
+    // kilocode_change end
 
     sdk.event.listen((e) => {
       const event = e.details
@@ -183,28 +234,86 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             }),
           )
           break
+        } // kilocode_change
+
+        // kilocode_change start
+        case "session.network.replied":
+        case "session.network.rejected": {
+          const requests = store.network[event.properties.sessionID]
+          if (!requests) break
+          const match = Binary.search(requests, event.properties.requestID, (r) => r.id)
+          if (!match.found) break
+          setStore(
+            "network",
+            event.properties.sessionID,
+            produce((draft) => {
+              draft.splice(match.index, 1)
+            }),
+          )
+          break
         }
+
+        case "session.network.restored": {
+          const requests = store.network[event.properties.sessionID]
+          if (!requests) break
+          const match = Binary.search(requests, event.properties.requestID, (r) => r.id)
+          if (match.found) {
+            setStore("network", event.properties.sessionID, match.index, "restored", true)
+          }
+          break
+        }
+
+        case "session.network.asked": {
+          const request = event.properties
+          const requests = store.network[request.sessionID]
+          if (!requests) {
+            setStore("network", request.sessionID, [request])
+            break
+          }
+          const match = Binary.search(requests, request.id, (r) => r.id)
+          if (match.found) {
+            setStore("network", request.sessionID, match.index, reconcile(request))
+            break
+          }
+          setStore(
+            "network",
+            request.sessionID,
+            produce((draft) => {
+              draft.splice(match.index, 0, request)
+            }),
+          )
+          break
+        }
+        // kilocode_change end
 
         case "todo.updated":
           setStore("todo", event.properties.sessionID, event.properties.todos)
           break
 
         case "session.diff":
-          setStore("session_diff", event.properties.sessionID, event.properties.diff)
+          setStore(
+            "session_diff",
+            event.properties.sessionID,
+            event.properties.diff.map(({ before: _, after: __, ...rest }) => rest),
+          )
           break
 
+        // kilocode_change start
         case "session.deleted": {
-          const result = Binary.search(store.session, event.properties.info.id, (s) => s.id)
-          if (result.found) {
+          const sid = event.properties.info.id
+          const match = Binary.search(store.session, sid, (s) => s.id)
+          if (match.found) {
             setStore(
               "session",
               produce((draft) => {
-                draft.splice(result.index, 1)
+                draft.splice(match.index, 1)
               }),
             )
           }
+          evict(sid)
           break
         }
+        // kilocode_change end
         case "session.updated": {
           const result = Binary.search(store.session, event.properties.info.id, (s) => s.id)
           if (result.found) {
@@ -225,31 +334,33 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           break
         }
 
+        // kilocode_change start
         case "message.updated": {
-          const messages = store.message[event.properties.info.sessionID]
+          const info = strip(event.properties.info)
+          const messages = store.message[info.sessionID]
           if (!messages) {
-            setStore("message", event.properties.info.sessionID, [event.properties.info])
+            setStore("message", info.sessionID, [info])
             break
           }
-          const result = Binary.search(messages, event.properties.info.id, (m) => m.id)
+          const result = Binary.search(messages, info.id, (m) => m.id)
           if (result.found) {
-            setStore("message", event.properties.info.sessionID, result.index, reconcile(event.properties.info))
+            setStore("message", info.sessionID, result.index, reconcile(info))
             break
           }
           setStore(
             "message",
-            event.properties.info.sessionID,
+            info.sessionID,
             produce((draft) => {
-              draft.splice(result.index, 0, event.properties.info)
+              draft.splice(result.index, 0, info)
             }),
           )
-          const updated = store.message[event.properties.info.sessionID]
+          const updated = store.message[info.sessionID]
           if (updated.length > 100) {
             const oldest = updated[0]
             batch(() => {
               setStore(
                 "message",
-                event.properties.info.sessionID,
+                info.sessionID,
                 produce((draft) => {
                   draft.shift()
                 }),
@@ -264,6 +375,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           }
           break
         }
+        // kilocode_change end
         case "message.removed": {
           const messages = store.message[event.properties.sessionID]
           const result = Binary.search(messages, event.properties.messageID, (m) => m.id)
@@ -340,6 +452,15 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           setStore("vcs", { branch: event.properties.branch })
           break
         }
+
+        // kilocode_change start
+        case "global.config.updated": {
+          sdk.client.config.get().then((x) => {
+            if (x.data) setStore("config", reconcile(x.data))
+          })
+          break
+        }
+        // kilocode_change end
       }
     })
 
@@ -406,13 +527,41 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             sdk.client.lsp.status().then((x) => setStore("lsp", reconcile(x.data!))),
             sdk.client.mcp.status().then((x) => setStore("mcp", reconcile(x.data!))),
             sdk.client.experimental.resource.list().then((x) => setStore("mcp_resource", reconcile(x.data ?? {}))),
-            sdk.client.formatter.status().then((x) => setStore("formatter", reconcile(x.data!))),
+            sdk.client.formatter.status().then((x) => setStore("formatter", reconcile(x.data!))), // kilocode_change
+            // kilocode_change start
+            sdk.client.network.list().then((x) => {
+              const next: Record<string, SessionNetworkWait[]> = {}
+              for (const item of x.data ?? []) {
+                if (!next[item.sessionID]) next[item.sessionID] = []
+                next[item.sessionID].push(item)
+              }
+              setStore("network", reconcile(next))
+            }),
+            // kilocode_change end
             sdk.client.session.status().then((x) => {
               setStore("session_status", reconcile(x.data!))
             }),
             sdk.client.provider.auth().then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
             sdk.client.vcs.get().then((x) => setStore("vcs", reconcile(x.data))),
             sdk.client.path.get().then((x) => setStore("path", reconcile(x.data!))),
+            syncWorkspaces(),
+            // kilocode_change start - show config warnings as persistent toast
+            sdk.client.config
+              .warnings()
+              .then((x) => {
+                const list = x.data ?? []
+                if (list.length === 0) return
+                const first = list[0]
+                const suffix = list.length > 1 ? ` (and ${list.length - 1} more)` : ""
+                toast.show({
+                  title: "Config Warning",
+                  message: first.message + suffix,
+                  variant: "warning",
+                  duration: 0,
+                })
+              })
+              .catch(() => {}),
+            // kilocode_change end
           ]).then(() => {
             setStore("status", "complete")
           })
@@ -431,7 +580,6 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       bootstrap()
     })
 
-    const fullSyncedSessions = new Set<string>()
     const result = {
       data: store,
       set: setStore,
@@ -471,15 +619,22 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               if (match.found) draft.session[match.index] = session.data!
               if (!match.found) draft.session.splice(match.index, 0, session.data!)
               draft.todo[sessionID] = todo.data ?? []
-              draft.message[sessionID] = messages.data!.map((x) => x.info)
+              draft.message[sessionID] = messages.data!.map((x) => strip(x.info)) // kilocode_change
               for (const message of messages.data!) {
                 draft.part[message.info.id] = message.parts
               }
-              draft.session_diff[sessionID] = diff.data ?? []
+              draft.session_diff[sessionID] = (diff.data ?? []).map(({ before: _, after: __, ...rest }) => rest)
             }),
           )
           fullSyncedSessions.add(sessionID)
         },
+        evict, // kilocode_change
+      },
+      workspace: {
+        get(workspaceID: string) {
+          return store.workspaceList.find((workspace) => workspace.id === workspaceID)
+        },
+        sync: syncWorkspaces,
       },
       bootstrap,
     }
